@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-13
+
 ### Breaking
 
 - The first release. Below 1.0 a minor release may change what the one before it shipped; this one starts the line at 0.1.0.
