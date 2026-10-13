@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-13
+
 ### Added
 
 - `Pool.takeExactly`: a stack of the smallest class that fits and of no other, for a scheduler that keeps its larger stacks for the work that asked for them.
