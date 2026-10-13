@@ -1,0 +1,23 @@
+# Until the first landing replaces it with the caller preflight generates: a
+# workflow is dispatched on a branch only once one of its name is on main.
+name: CI
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        type: choice
+        options: [fast, merge, release]
+        default: fast
+      land:
+        type: boolean
+        default: true
+      status-only:
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  none:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "main has no package yet"
