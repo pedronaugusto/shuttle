@@ -1,0 +1,23 @@
+.{
+    .name = .shuttle,
+    .version = "0.0.0",
+    .minimum_zig_version = "0.17.0",
+    .fingerprint = 0xd64cb17be6a813d3,
+    .paths = .{ "build.zig", "build.zig.zon", "src", "docs/design.md", "README.md", "CHANGELOG.md", "LICENSE" },
+    .dependencies = .{
+        .aegis = .{
+            .url = "git+https://github.com/pedronaugusto/aegis?ref=v0.1.3#4e37678e9ff0d78ada850ed4dc00f714bbc8441c",
+            .hash = "aegis-0.1.3-rsxouhQiBwCaQ9NGzUiaQ1xdrFSNYoi3u0Z6sLjI5lrv",
+        },
+    },
+    .dev_dependencies = .{
+        .preflight = .{
+            .url = "git+https://github.com/pedronaugusto/preflight?ref=v0.4.2#6c014e77b1c24149b9f790204d7ee3e6358a8bdd",
+            .hash = "preflight-0.4.2-LX1Zwk14DgDRIFh62ke49W2BAC1HKnkh-ndj_0sSARCN",
+        },
+        .shakedown = .{
+            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.3.2#9102dc26d58253e8c026f551c30a43c7e0880dcb",
+            .hash = "shakedown-0.3.2-BR8U4y4nFgAKxy_13FtFRMY9Bxrug0TjiUZ8IDSqGUtp",
+        },
+    },
+}
