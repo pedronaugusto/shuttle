@@ -80,7 +80,8 @@ fn generator() !void {
 
 Contexts are the layer beneath, for a scheduler of its own: any context
 switches to any suspended one, with a message each way. A thread's own
-context is `.{}`:
+context is `.{}`. A context is what a switch saves, 40 bytes on aarch64 and
+32 on x86_64; the stack it runs on stays its maker's:
 
 <!-- BEGIN GENERATED zig build docs -- context -->
 ```zig
@@ -95,11 +96,12 @@ fn pinger(_: ?*anyopaque, message: ?*anyopaque) callconv(.c) noreturn {
 }
 
 fn context() !void {
-    ping = try shuttle.Context.init(try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) }), pinger, null);
+    var stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
+    defer stack.deinit();
+    ping = try shuttle.Context.init(&stack, pinger, null); // the stack stays yours
+    defer ping.deinit(&stack);
     const back = shuttle.switchTo(&main_context, &ping, @ptrFromInt(41)); // safe: a count
     std.debug.assert(@intFromPtr(back) == 42); // safe: a count
-    var s = ping.deinit();
-    s.deinit();
 }
 ```
 <!-- END GENERATED -->
@@ -115,6 +117,7 @@ const shuttle = @import("shuttle");
 
 const Job = struct {
     context: shuttle.Context,
+    stack: shuttle.Stack,
     /// Whoever switched to the job, to switch back to.
     worker: *shuttle.Context = undefined,
     done: bool = false,
@@ -142,11 +145,12 @@ fn jobs() !void {
     } });
     defer pool.deinit(gpa);
     var worker: shuttle.Context = .{};
-    var job: Job = undefined;
-    job = .{ .context = try .init(pool.take(.fromRaw(16 * 1024)).?, shuttle.handoff.entry(work), &job), .worker = &worker };
+    var job: Job = .{ .context = undefined, .stack = pool.take(.fromRaw(16 * 1024)).?, .worker = &worker };
+    job.context = try .init(&job.stack, shuttle.handoff.entry(work), &job);
     shuttle.handoff.switchTo(&worker, &job.context, null);
     std.debug.assert(job.done);
-    pool.give(job.context.deinit());
+    job.context.deinit(&job.stack);
+    pool.give(job.stack);
 }
 ```
 <!-- END GENERATED -->
@@ -198,10 +202,10 @@ its `try` unwinds it through its defers.
 | `stack.carve(len, alignment)`, `stack.discard(keep_from)` | Takes bytes from the top for what lives as long as the stack; gives pages below a point back to the system |
 | `Pool.init(gpa, .{ .classes, .guard, .commit })`, `pool.deinit(gpa)` | Stacks in size classes, reserved once |
 | `pool.take(size)`, `pool.give(stack)` | The smallest class that fits and has a stack free, or null; a stack back. Any thread |
-| `pool.takeExactly(size)`, `pool.number(stack)`, `pool.count()`, `pool.inUse()` | Only the smallest class that fits; a stack's stable number among all the pool's; how many it holds; how many are out |
-| `Context.init(stack, entry, arg)`, `context.deinit()` | A context that runs `entry(arg, message)` when first switched to; ended, its stack given back |
+| `pool.takeExactly(size)`, `pool.number(stack)`, `pool.stackOf(n)`, `pool.count()`, `pool.inUse()` | Only the smallest class that fits; a stack's stable number among all the pool's, and the stack a number names, so a holder keeps only the number; how many it holds; how many are out |
+| `Context.init(&stack, entry, arg)`, `context.deinit(&stack)` | A context that runs `entry(arg, message)` on `stack` when first switched to; ended, its stack free again |
 | `switchTo(from, to, message)` | Saves the running context into `from`, runs `to`, and returns the message of the switch that resumes `from` |
-| `context.trace(out)`, `context.traceFrom(first, out)`, `context.stackPointer()` | A context's return addresses to its first frame, running or suspended, from the caller or from a kept call site; where a suspended one's stack ends |
+| `context.trace(&stack, out)`, `context.traceFrom(&stack, first, out)`, `context.stackPointer()` | A context's return addresses to its first frame, running or suspended, from the caller or from a kept call site; where a suspended one's stack ends |
 | `handoff.switchTo(from, to, after)`, `handoff.entry(body)` | A switch whose `after` runs on the side switched to once `from` is saved; the entry of a context switched to that way |
 | `Coroutine(Input, Yield, Return)` | `init(stack, body, args)`, `next(input)`, `tryNext(input)`, `state()`, `done()`, `panicked()`, `deinit()` |
 | `Coroutine(...).Yielder.yield(value)` | Hands `value` to the code running the coroutine and returns its next input, or `error.Canceled` |

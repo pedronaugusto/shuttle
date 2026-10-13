@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- A `Context` is what a switch saves and no more: its registers, on Windows the stack bounds, under ThreadSanitizer its fiber. 40 bytes on aarch64 where it was 112, 32 on x86_64 where it was 104, 56 on Windows x64 where it was 128: a scheduler that keeps a context in each task's record keeps 72 bytes less of it hot. The stack it runs on is its maker's, and the calls that need it are given it: `Context.init(&stack, entry, arg)` (on Windows `stack` learns what was committed for the first frame), `context.deinit(&stack)`, which returns nothing (on Windows `stack` learns what the context's code committed), `context.trace(&stack, out)` and `context.traceFrom(&stack, first, out)`. A coroutine's stack is its `Core.stack` field, where it was `Core.stack()`.
+
+### Added
+
+- `Pool.stackOf(n)`: the stack a number (`Pool.number`) names, as `take` handed it out, so a holder keeps only the number and describes the stack again to give it back.
+
+### Changed
+
+- A pool tells Valgrind of each of its stacks once, for the pool's life, where it did at each `take` and `give`: a stack described again by its number carries no registration.
+- The tests run in the `shuttle` module itself, which gets shakedown for them: a shakedown that links shuttle takes this copy, so a test binary holds one shuttle.
+
 ## [0.1.1] - 2026-10-13
 
 ### Added

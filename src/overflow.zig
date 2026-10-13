@@ -57,7 +57,7 @@ const pc_register: u16 = switch (builtin.cpu.arch) {
 };
 
 pub fn diagnose(address: usize, context: ?std.debug.CpuContextPtr) Diagnosis {
-    if (coroutine.running()) |c| if (c.stack().guards(address)) return .{ .coroutine = c.stack() };
+    if (coroutine.running()) |c| if (c.stack.guards(address)) return .{ .coroutine = c.stack };
     if (context) |ctx| if (register(ctx, sp_register)) |sp| {
         // A frame's own accesses lie just above the stack pointer, or within
         // a red zone just below it; nothing else of a program faults there.

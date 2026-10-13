@@ -33,6 +33,8 @@ pub const State = enum(u8) {
 /// and the segfault handler read.
 pub const Core = struct {
     context: Context,
+    /// The stack the coroutine runs on, below its state.
+    stack: Stack,
     /// Whoever runs the coroutine, saved while it runs.
     caller: Context = .{},
     state: State = .fresh,
@@ -62,10 +64,6 @@ pub const Core = struct {
         c.leave(.panicked);
         unreachable; // unreachable: nothing switches back to a panicked coroutine
     }
-
-    pub fn stack(c: *const Core) Stack {
-        return c.context.stack.?;
-    }
 };
 
 /// The coroutine running on this thread, if any. Read only on this
@@ -76,7 +74,7 @@ threadlocal var active: ?*Core = null;
 /// The coroutine this thread runs, when the code asking runs on its stack.
 pub fn current() ?*Core {
     const c = running() orelse return null;
-    if (!c.stack().contains(trace.stackPointer())) return null;
+    if (!c.stack.contains(trace.stackPointer())) return null;
     return c;
 }
 
@@ -145,7 +143,7 @@ pub fn Coroutine(comptime Input: type, comptime Yield: type, comptime Return: ty
                 }
             }.start;
             self.* = .{
-                .core = .{ .context = try Context.init(s, entry, self) },
+                .core = .{ .context = try Context.init(&s, entry, self), .stack = s },
                 .value = undefined,
                 .top = top,
                 .args = held,
@@ -208,7 +206,8 @@ pub fn Coroutine(comptime Input: type, comptime Yield: type, comptime Return: ty
             }
             std.debug.assert(self.core.state != .running);
             const top = self.top;
-            var s = self.core.context.deinit();
+            var s = self.core.stack;
+            self.core.context.deinit(&s);
             s.top = top;
             return s;
         }
@@ -222,7 +221,7 @@ pub fn handlePanic(msg: []const u8, first_trace_address: ?usize) noreturn {
     @branchHint(.cold);
     const cause = Panic.takeRaising();
     if (current()) |c| {
-        const s = c.stack();
+        const s = c.stack;
         // As std's handler starts its trace: at the panic, not in here.
         c.panic.record(msg, first_trace_address orelse @returnAddress(), cause, s.bottom, s.end);
         c.abandon();

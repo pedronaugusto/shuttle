@@ -11,13 +11,40 @@ const walking = @import("trace.zig");
 
 const small: Stack.Options = .{ .size = .fromRaw(64 * 1024) };
 
-fn make(entry: Context.Entry, arg: ?*anyopaque) !Context {
-    return Context.init(try Stack.init(small), entry, arg);
+/// The stacks of the contexts `make` made, each beside its context.
+var made: [4]struct { context: ?*const Context = null, stack: Stack = undefined } = @splat(.{});
+
+/// A context at `c` on a small stack of its own, which `end` releases.
+fn make(c: *Context, entry: Context.Entry, arg: ?*anyopaque) !void {
+    for (&made) |*m| if (m.context == null) {
+        m.stack = try Stack.init(small);
+        c.* = try Context.init(&m.stack, entry, arg);
+        m.context = c;
+        return;
+    };
+    unreachable; // unreachable: no test makes more contexts at once than the table holds
+}
+
+fn stackOf(c: *const Context) *Stack {
+    for (&made) |*m| if (m.context == c) return &m.stack;
+    unreachable; // unreachable: only contexts `make` made are asked about
 }
 
 fn end(c: *Context) void {
-    var s = c.deinit();
+    const s = stackOf(c);
+    c.deinit(s);
     s.deinit();
+    for (&made) |*m| if (m.context == c) {
+        m.context = null;
+    };
+}
+
+test "a context is what a switch saves: its registers, and on Windows its stack bounds, and under ThreadSanitizer its fiber" {
+    const native = @import("arch.zig").native;
+    var size: usize = @sizeOf(native.Registers);
+    if (builtin.os.tag == .windows) size += @sizeOf(teb.Bounds);
+    if (builtin.sanitize_thread) size += @sizeOf(usize);
+    try std.testing.expectEqual(std.mem.alignForward(usize, size, @alignOf(Context)), @sizeOf(Context));
 }
 
 test "a context starts at its entry with its argument and the first message, and messages go both ways" {
@@ -37,7 +64,7 @@ test "a context starts at its entry with its argument and the first message, and
         }
     };
     var marker: u8 = 0;
-    Probe.task = try make(Probe.run, &marker);
+    try make(&Probe.task, Probe.run, &marker);
     defer end(&Probe.task);
     var n: usize = 1;
     for (0..1000) |_| {
@@ -63,7 +90,7 @@ test "a context enters its function with the stack a call leaves, so a local ali
             unreachable; // unreachable: the test ends the context without switching back
         }
     };
-    Probe.task = try make(Probe.run, null);
+    try make(&Probe.task, Probe.run, null);
     defer end(&Probe.task);
     _ = Context.switchTo(&Probe.driver, &Probe.task, null);
     try std.testing.expectEqual(@as(usize, 0), Probe.address % 16);
@@ -84,7 +111,7 @@ test "contexts switch among themselves, not only with the thread's own" {
             }
         }
     };
-    for (&Ring.tasks, 0..) |*t, i| t.* = try make(Ring.run, @ptrFromInt(i)); // safe: an index as the argument
+    for (&Ring.tasks, 0..) |*t, i| try make(t, Ring.run, @ptrFromInt(i)); // safe: an index as the argument
     defer for (&Ring.tasks) |*t| end(t);
     _ = Context.switchTo(&Ring.driver, &Ring.tasks[0], null);
     try std.testing.expectEqualSlices(usize, &.{ 100, 100, 100 }, &Ring.visits);
@@ -107,18 +134,18 @@ test "a context's trace ends at its first frame, inside its stack, whether it is
                 std.mem.doNotOptimizeAway(n);
                 return;
             }
-            running_len = task.trace(&running).len;
+            running_len = task.trace(stackOf(&task), &running).len;
             _ = Context.switchTo(&task, &driver, null);
         }
     };
-    Probe.task = try make(Probe.run, null);
+    try make(&Probe.task, Probe.run, null);
     defer end(&Probe.task);
     _ = Context.switchTo(&Probe.driver, &Probe.task, null);
     // deeper four times and run, and the walk stopped short of its room.
     try std.testing.expect(Probe.running_len >= 5 and Probe.running_len < Probe.running.len);
     if (!walking.suspended_available) return;
     var suspended: [64]usize = undefined;
-    const len = Probe.task.trace(&suspended).len;
+    const len = Probe.task.trace(stackOf(&Probe.task), &suspended).len;
     // From the switch: the same frames, the one that called trace aside.
     try std.testing.expect(len >= 5 and len < suspended.len);
     try std.testing.expectEqualSlices(usize, Probe.running[Probe.running_len - 4 ..][0..4], suspended[len - 4 ..][0..4]);
@@ -126,7 +153,7 @@ test "a context's trace ends at its first frame, inside its stack, whether it is
     // frame returns to): the frames from there on.
     var from: [64]usize = undefined;
     const first = Probe.running[Probe.running_len - 2];
-    try std.testing.expectEqualSlices(usize, Probe.running[Probe.running_len - 2 .. Probe.running_len], Probe.task.traceFrom(first, &from));
+    try std.testing.expectEqualSlices(usize, Probe.running[Probe.running_len - 2 .. Probe.running_len], Probe.task.traceFrom(stackOf(&Probe.task), first, &from));
 }
 
 test "std's own stack walk on a context's stack ends at the context's first frame" {
@@ -143,7 +170,7 @@ test "std's own stack walk on a context's stack ends at the context's first fram
             unreachable; // unreachable: the test ends the context without switching back
         }
     };
-    Probe.task = try make(Probe.run, null);
+    try make(&Probe.task, Probe.run, null);
     defer end(&Probe.task);
     _ = Context.switchTo(&Probe.driver, &Probe.task, null);
     try std.testing.expect(Probe.len < Probe.buffer.len);
@@ -174,7 +201,7 @@ test "a context suspended on one thread resumes on another, and back" {
             _ = Context.switchTo(&own, &task, null);
         }
     };
-    Probe.task = try make(Probe.run, null);
+    try make(&Probe.task, Probe.run, null);
     defer end(&Probe.task);
     for (0..4) |_| {
         const t = try std.Thread.spawn(.{}, Probe.drive, .{});
@@ -210,7 +237,7 @@ test "Windows: a context's stack bounds are its own while it runs, and it grows 
     };
     var stack = try Stack.init(.{ .size = .fromRaw(1024 * 1024) });
     const committed = stack.limit;
-    Probe.task = try Context.init(stack, Probe.run, null);
+    Probe.task = try Context.init(&stack, Probe.run, null);
     const outer = teb.get();
     _ = Context.switchTo(&Probe.driver, &Probe.task, null);
     // Back on the thread's own stack, with its own bounds.
@@ -220,7 +247,7 @@ test "Windows: a context's stack bounds are its own while it runs, and it grows 
     // 800 KiB deep, where two pages were committed: grown, and the
     // context's committed limit followed it down.
     try std.testing.expect(Probe.reached < committed - 512 * 1024);
-    stack = Probe.task.deinit();
+    Probe.task.deinit(&stack);
     try std.testing.expect(stack.limit <= Probe.reached);
     stack.deinit();
 }

@@ -77,6 +77,9 @@ const Shelf = struct {
     /// Windows: per stack, its lowest committed byte, zero until it is
     /// first handed out. Only the stack's holder touches its entry.
     limits: if (is_windows) []usize else void,
+    /// Under Valgrind, each stack's registration, made once for the pool's
+    /// life; empty elsewhere.
+    valgrind: []usize,
 
     fn init(gpa: std.mem.Allocator, class: Class, options: Options) InitError!Shelf {
         const layout = try Stack.Layout.of(.{ .size = class.size, .guard = options.guard, .commit = options.commit });
@@ -88,6 +91,7 @@ const Shelf = struct {
             .slabs = try gpa.alloc(memory.Pages, slab_count),
             .links = undefined,
             .limits = undefined,
+            .valgrind = &.{},
         };
         errdefer gpa.free(s.slabs);
         s.links = try gpa.alloc(u32, class.count);
@@ -117,10 +121,21 @@ const Shelf = struct {
             i -= 1;
             s.push(i);
         }
+        // Valgrind is told of every stack once: a stack handed out is
+        // described by its number alone, and carries no registration.
+        if (std.valgrind.runningOnValgrind() > 0) {
+            s.valgrind = try gpa.alloc(usize, class.count);
+            for (s.valgrind, 0..) |*id, index| {
+                const usable: [*]u8 = @ptrFromInt(s.stack(0, @intCast(index)).bottom); // safe: the stack's own bytes, named to Valgrind
+                id.* = std.valgrind.stackRegister(usable[0..s.layout.usable]);
+            }
+        }
         return s;
     }
 
     fn deinit(s: *Shelf, gpa: std.mem.Allocator) void {
+        for (s.valgrind) |id| std.valgrind.stackDeregister(id);
+        if (s.valgrind.len > 0) gpa.free(s.valgrind);
         for (s.slabs) |slab| memory.release(slab);
         gpa.free(s.slabs);
         gpa.free(s.links);
@@ -232,15 +247,14 @@ fn takeFrom(p: *Pool, class: u16) ?Stack {
         };
         s.limits[index] = stack.limit;
     }
-    stack.register();
     _ = p.in_use.fetchAdd(1, .monotonic);
     return stack;
 }
 
-/// Gives back a stack `take` handed out. Nothing may run on it.
+/// Gives back a stack `take` handed out, or one `stackOf` described. Nothing
+/// may run on it.
 pub fn give(p: *Pool, stack: Stack) void {
-    var s = stack;
-    s.unregister();
+    const s = stack;
     const slot = s.slot.?;
     const shelf = &p.classes[slot.class];
     if (is_windows) shelf.limits[slot.index] = @min(shelf.limits[slot.index], s.limit);
@@ -267,6 +281,16 @@ pub fn count(p: *const Pool) u32 {
 pub fn number(p: *const Pool, stack: Stack) u32 {
     const slot = stack.slot.?;
     return p.classes[slot.class].first + slot.index;
+}
+
+/// The stack numbered `n` (`number`), as `take` handed it out: a holder
+/// that keeps only the number describes its stack again with this, to
+/// give it back or to look at its bounds.
+pub fn stackOf(p: *const Pool, n: u32) Stack {
+    for (p.classes, 0..) |*s, class| {
+        if (n >= s.first and n - s.first < s.count) return s.stack(@intCast(class), n - s.first); // safe: `init` refuses more classes than a u16 names
+    }
+    unreachable; // unreachable: a number is below `count()`
 }
 
 /// The usable size of each class, smallest first.

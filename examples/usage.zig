@@ -62,17 +62,19 @@ fn pinger(_: ?*anyopaque, message: ?*anyopaque) callconv(.c) noreturn {
 }
 
 fn context() !void {
-    ping = try shuttle.Context.init(try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) }), pinger, null);
+    var stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
+    defer stack.deinit();
+    ping = try shuttle.Context.init(&stack, pinger, null); // the stack stays yours
+    defer ping.deinit(&stack);
     const back = shuttle.switchTo(&main_context, &ping, @ptrFromInt(41)); // safe: a count
     std.debug.assert(@intFromPtr(back) == 42); // safe: a count
-    var s = ping.deinit();
-    s.deinit();
 }
 // --- README:context ---
 
 // --- README:jobs ---
 const Job = struct {
     context: shuttle.Context,
+    stack: shuttle.Stack,
     /// Whoever switched to the job, to switch back to.
     worker: *shuttle.Context = undefined,
     done: bool = false,
@@ -100,10 +102,11 @@ fn jobs() !void {
     } });
     defer pool.deinit(gpa);
     var worker: shuttle.Context = .{};
-    var job: Job = undefined;
-    job = .{ .context = try .init(pool.take(.fromRaw(16 * 1024)).?, shuttle.handoff.entry(work), &job), .worker = &worker };
+    var job: Job = .{ .context = undefined, .stack = pool.take(.fromRaw(16 * 1024)).?, .worker = &worker };
+    job.context = try .init(&job.stack, shuttle.handoff.entry(work), &job);
     shuttle.handoff.switchTo(&worker, &job.context, null);
     std.debug.assert(job.done);
-    pool.give(job.context.deinit());
+    job.context.deinit(&job.stack);
+    pool.give(job.stack);
 }
 // --- README:jobs ---

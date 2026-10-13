@@ -25,6 +25,7 @@ const arch = builtin.cpu.arch;
 const Scrambler = struct {
     var driver: Context = .{};
     var task: Context = undefined;
+    var stack: Stack = undefined;
     /// The control state the context sets before it switches back, and
     /// what it finds once it is back.
     var own: native.Control = undefined;
@@ -33,12 +34,13 @@ const Scrambler = struct {
 
     fn start() !void {
         own = scrambledControl();
-        task = try Context.init(try Stack.init(.{ .size = .fromRaw(64 * 1024) }), run, null);
+        stack = try Stack.init(.{ .size = .fromRaw(64 * 1024) });
+        task = try Context.init(&stack, run, null);
     }
 
     fn finish() void {
-        var s = task.deinit();
-        s.deinit();
+        task.deinit(&stack);
+        stack.deinit();
     }
 
     fn run(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {

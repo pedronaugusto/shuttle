@@ -168,6 +168,7 @@ fn overflowCoroutine() void {
 
 var driver: shuttle.Context = .{};
 var task: shuttle.Context = undefined;
+var task_stack: shuttle.Stack = undefined;
 
 fn overflowEntry(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
     std.mem.doNotOptimizeAway(recurse(1 << 20));
@@ -176,7 +177,8 @@ fn overflowEntry(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
 }
 
 fn overflowContext() void {
-    task = shuttle.Context.init(newStack(), overflowEntry, null) catch @panic("no stack");
+    task_stack = newStack();
+    task = shuttle.Context.init(&task_stack, overflowEntry, null) catch @panic("no stack");
     _ = shuttle.switchTo(&driver, &task, null);
 }
 

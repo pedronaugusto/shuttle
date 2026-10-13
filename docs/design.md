@@ -20,7 +20,7 @@ under `src/`.
 | Platform | `memory.zig` reserves, guards, commits and releases address space; `teb.zig` reads and writes the Windows thread information block's stack fields; `sanitizer.zig` is ThreadSanitizer's fiber interface; `arch/x86_64.zig`, `arch/aarch64.zig` and `arch/riscv64.zig` own each architecture's switch, control state, first frame and trampoline. |
 | The switch | `arch.zig` picks this architecture's. |
 | Traces and stacks | `trace.zig` walks frame records inside given bounds; `Stack.zig` owns one stack: its layout, guard, Windows commit and Valgrind registration. |
-| Pools and contexts | `Pool.zig` owns size classes of stacks and their free lists; `Context.zig` owns a context's saved state and `switchTo`. |
+| Pools and contexts | `Pool.zig` owns size classes of stacks, their free lists, and their Valgrind registrations for the pool's life; `Context.zig` owns a context's saved state and `switchTo`. A context is what a switch saves and no more (registers; on Windows the stack bounds; under ThreadSanitizer the fiber): the stack it runs on is its maker's, and `init`, `deinit` and the traces are given it, so a scheduler that keeps thousands of contexts keeps only a stack's number beside each (`Pool.number`, `Pool.stackOf`). |
 | Handoff and panics | `handoff.zig` owns the switch whose other side finishes it; `Panic.zig` owns a coroutine's recorded panic and its printing. |
 | Coroutines | `coroutine.zig` owns `Coroutine`, the thread's running coroutine and the panic handler. |
 | Generators and overflows | `generator.zig` wraps a coroutine as an iterator; `overflow.zig` names a stack overflow. |

@@ -31,6 +31,9 @@ pub const supported = @import("arch.zig").supported;
 
 pub const switchTo = Context.switchTo;
 
+// The tests run in this module, so test support that links shuttle
+// (shakedown) takes this copy and the test binary holds one shuttle.
 test {
     std.testing.refAllDecls(@This());
+    _ = @import("tests.zig");
 }

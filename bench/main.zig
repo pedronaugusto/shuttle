@@ -20,6 +20,7 @@ const Bench = struct {
     pool: shuttle.Pool = undefined,
     driver: shuttle.Context = .{},
     task: shuttle.Context = undefined,
+    stack: shuttle.Stack = undefined,
     counter: *Counter = undefined,
     numbers: Numbers = undefined,
     sink: u64 = 0,
@@ -32,12 +33,13 @@ const Bench = struct {
     }
 
     fn switchSetup(b: *Bench) WorkloadError!void {
-        b.task = try shuttle.Context.init(try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) }), bounce, b);
+        b.stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
+        b.task = try shuttle.Context.init(&b.stack, bounce, b);
     }
 
     fn switchTeardown(b: *Bench) WorkloadError!void {
-        var s = b.task.deinit();
-        s.deinit();
+        b.task.deinit(&b.stack);
+        b.stack.deinit();
     }
 
     fn switchRoundTrip(b: *Bench, units: u64) WorkloadError!void {
@@ -57,7 +59,8 @@ const Bench = struct {
     }
 
     fn handoffSetup(b: *Bench) WorkloadError!void {
-        b.task = try shuttle.Context.init(try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) }), shuttle.handoff.entry(handoffBody), b);
+        b.stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
+        b.task = try shuttle.Context.init(&b.stack, shuttle.handoff.entry(handoffBody), b);
     }
 
     fn handoffRoundTrip(b: *Bench, units: u64) WorkloadError!void {
@@ -120,8 +123,9 @@ const Bench = struct {
     /// ended.
     fn createOwn(b: *Bench, units: u64) WorkloadError!void {
         for (0..units) |_| {
-            var c = try shuttle.Context.init(try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) }), never, b);
-            var s = c.deinit();
+            var s = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
+            var c = try shuttle.Context.init(&s, never, b);
+            c.deinit(&s);
             s.deinit();
         }
     }
@@ -129,8 +133,10 @@ const Bench = struct {
     /// A pool's stack, a context on it, and the stack given back.
     fn createPooled(b: *Bench, units: u64) WorkloadError!void {
         for (0..units) |_| {
-            var c = try shuttle.Context.init(b.pool.take(.fromRaw(64 * 1024)) orelse return error.PoolEmpty, never, b);
-            b.pool.give(c.deinit());
+            var s = b.pool.take(.fromRaw(64 * 1024)) orelse return error.PoolEmpty;
+            var c = try shuttle.Context.init(&s, never, b);
+            c.deinit(&s);
+            b.pool.give(s);
         }
     }
 

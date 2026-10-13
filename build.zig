@@ -25,14 +25,13 @@ pub fn dev(b: *std.Build, tools: type) void {
     const p = package.builder;
     const module = package.module("shuttle");
     const aegis = p.dependency("aegis", .{ .target = target, .optimize = optimize });
-    const shakedown = b.dependency("shakedown", .{ .target = target, .optimize = optimize }).module("shakedown");
     const filters: []const []const u8 = if (test_filter) |filter| &.{filter} else &.{};
 
     const test_step = b.step("test", "Run the tests, the fault program, the example and each benchmark once");
     const check = b.step("check", "Compile the tests, programs, example and benchmarks without running them");
 
     // The suite alone, in the mode asked for: what ThreadSanitizer runs.
-    const tests = suite(b, p.path("src/tests.zig"), "shuttle-tests", target, optimize, aegis.module("aegis"), shakedown, filters);
+    const tests = suite(b, "shuttle-tests", target, optimize, filters);
     const unit = b.step("unit", "Run the test suite alone");
     unit.dependOn(&b.addRunArtifact(tests).step);
     test_step.dependOn(unit);
@@ -42,17 +41,15 @@ pub fn dev(b: *std.Build, tools: type) void {
     // across a switch, a stack 8 bytes off), so every run of the tests runs
     // them optimized as well, without frame pointers, whatever its mode.
     if (optimize != .fast) {
-        const fast_shakedown = b.dependency("shakedown", .{ .target = target, .optimize = .fast }).module("shakedown");
-        const fast_aegis = p.dependency("aegis", .{ .target = target, .optimize = .fast }).module("aegis");
-        const fast = suite(b, p.path("src/tests.zig"), "shuttle-tests-fast", target, .fast, fast_aegis, fast_shakedown, filters);
+        const fast = suite(b, "shuttle-tests-fast", target, .fast, filters);
         fast.root_module.omit_frame_pointer = true;
         test_step.dependOn(&b.addRunArtifact(fast).step);
         check.dependOn(&fast.step);
     }
 
-    // The properties alone, every binary of them a property: what the
+    // The properties alone, every test of the binary a property: what the
     // fuzzer runs (`bay properties --fuzz`).
-    const properties = suite(b, p.path("src/property_test.zig"), "shuttle-properties", target, optimize, aegis.module("aegis"), shakedown, filters);
+    const properties = suite(b, "shuttle-properties", target, optimize, &.{"property_test."});
     b.step("properties", "Run the properties alone").dependOn(&b.addRunArtifact(properties).step);
     check.dependOn(&properties.step);
 
@@ -97,17 +94,15 @@ pub fn dev(b: *std.Build, tools: type) void {
     tools.preflight.addConsumerCheck(b, p, .{ .package = "shuttle", .program = p.path("ci/consumer.zig"), .packages = &.{aegis}, .modules = &.{"shuttle"} });
 }
 
-fn suite(b: *std.Build, root: std.Build.LazyPath, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, aegis: *std.Build.Module, shakedown: *std.Build.Module, filters: []const []const u8) *std.Build.Step.Compile {
-    return b.addTest(.{
-        .name = name,
-        .filters = filters,
-        .root_module = b.createModule(.{
-            .root_source_file = root,
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{ .{ .name = "aegis", .module = aegis }, .{ .name = "shakedown", .module = shakedown } },
-        }),
-    });
+/// The tests run in the `shuttle` module itself, which gets shakedown for
+/// them: shakedown links shuttle, and takes this copy, so a test binary
+/// holds one shuttle.
+fn suite(b: *std.Build, name: []const u8, target: std.Build.ResolvedTarget, optimize: std.lang.Optimize, filters: []const []const u8) *std.Build.Step.Compile {
+    const module = b.dependency("shuttle", .{ .target = target, .optimize = optimize }).module("shuttle");
+    if (module.import_table.get("shakedown") == null) {
+        module.addImport("shakedown", b.dependency("shakedown", .{ .target = target, .optimize = optimize }).module("shakedown"));
+    }
+    return b.addTest(.{ .name = name, .filters = filters, .root_module = module });
 }
 
 /// shuttle again, in the mode a benchmark builds in: an imported module

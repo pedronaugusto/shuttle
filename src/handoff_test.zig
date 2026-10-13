@@ -6,6 +6,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const aegis = @import("aegis");
 const Context = @import("Context.zig");
+const Stack = @import("Stack.zig");
 const Pool = @import("Pool.zig");
 const handoff = @import("handoff.zig");
 const supported = @import("arch.zig").supported;
@@ -71,6 +72,7 @@ const Jobs = struct {
     var all: [workers]Worker = undefined;
     var done: std.atomic.Value(usize) = .init(0);
     var jobs: [count]Job = undefined;
+    var stacks: [count]Stack = undefined;
 
     fn body(arg: ?*anyopaque) noreturn {
         const job: *Job = @ptrCast(@alignCast(arg.?)); // safe: the test passes its job
@@ -111,10 +113,14 @@ test "worker threads run contexts that park themselves on another worker's queue
     var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{.{ .size = .fromRaw(64 * 1024), .count = Jobs.count }} });
     defer pool.deinit(std.testing.allocator);
     for (&Jobs.jobs, 0..) |*job, i| {
-        job.* = .{ .context = try Context.init(pool.take(.fromRaw(64 * 1024)).?, handoff.entry(Jobs.body), job) };
+        Jobs.stacks[i] = pool.take(.fromRaw(64 * 1024)).?;
+        job.* = .{ .context = try Context.init(&Jobs.stacks[i], handoff.entry(Jobs.body), job) };
         Jobs.all[i % Jobs.workers].push(job);
     }
-    defer for (&Jobs.jobs) |*job| pool.give(job.context.deinit());
+    defer for (&Jobs.jobs, &Jobs.stacks) |*job, *stack| {
+        job.context.deinit(stack);
+        pool.give(stack.*);
+    };
     var threads: [Jobs.workers]std.Thread = undefined;
     for (&threads, &Jobs.all) |*t, *w| t.* = try std.Thread.spawn(.{}, Jobs.Worker.run, .{w});
     for (threads) |t| t.join();

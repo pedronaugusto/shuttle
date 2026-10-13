@@ -3,7 +3,9 @@
 //!
 //! A thread's own context is `.{}`: it needs no stack and no `init`, and is
 //! saved when the thread first switches away. A context made with `init`
-//! starts at its entry when first switched to.
+//! starts at its entry when first switched to. A context is what a switch
+//! saves and nothing more: the stack it runs on is its maker's to keep, and
+//! the calls that need the stack (`init`, `deinit`, `trace`) are given it.
 //!
 //! A switch is a call as far as the code on either side can tell: the
 //! registers the calling convention says a call keeps are kept, the
@@ -30,8 +32,6 @@ registers: native.Registers = undefined,
 bounds: if (is_windows) teb.Bounds else void = if (is_windows) undefined else {},
 /// ThreadSanitizer's record of the context.
 fiber: sanitizer.Fiber = sanitizer.none,
-/// The stack it runs on; null for a thread's own context.
-stack: ?Stack = null,
 
 /// A context's first function. `arg` is what `init` was given, `message`
 /// what the first switch to it sent. It never returns: when its work is
@@ -45,31 +45,28 @@ pub const headroom = 64;
 
 /// A context that runs `entry(arg, message)` on `stack` when first switched
 /// to. The first frame goes below `stack.top`, so what was carved above it
-/// stays. The context holds the stack until `deinit` gives it back.
-pub fn init(stack: Stack, entry: Entry, arg: ?*anyopaque) error{StackTooSmall}!Context {
-    var s = stack;
-    const top = s.top - headroom;
-    try s.reach(top - native.first_frame);
+/// stays; on Windows `stack` learns what was committed for it. The stack is
+/// the context's until `deinit`: nothing else may run on it.
+pub fn init(stack: *Stack, entry: Entry, arg: ?*anyopaque) error{StackTooSmall}!Context {
+    const top = stack.top - headroom;
+    try stack.reach(top - native.first_frame);
     const above: [*]u8 = @ptrFromInt(top); // safe: the headroom inside the stack, committed by `reach`
     @memset(above[0..headroom], 0);
     const registers = native.initial(top, @intFromPtr(entry), @intFromPtr(arg), @intFromPtr(&native.trampoline)); // safe: addresses, laid in the first frame and read back as functions and an argument
     return .{
         .registers = registers,
-        .bounds = if (is_windows) .{ .base = s.end, .limit = s.limit, .deallocation = s.base } else {},
+        .bounds = if (is_windows) .{ .base = stack.end, .limit = stack.limit, .deallocation = stack.base } else {},
         .fiber = sanitizer.create(),
-        .stack = s,
     };
 }
 
-/// Ends a context made by `init`, which must not be running, and gives
-/// back its stack: on Windows with the pages its code committed, so a
-/// context made on it next starts with them.
-pub fn deinit(c: *Context) Stack {
+/// Ends a context made by `init` on `stack`, which must not be running:
+/// the stack is free again. On Windows `stack` learns the pages its code
+/// committed, so a context made on it next starts with them.
+pub fn deinit(c: *Context, stack: *Stack) void {
     sanitizer.destroy(c.fiber);
-    var s = c.stack.?;
-    if (is_windows) s.limit = @min(s.limit, c.bounds.limit);
+    if (is_windows) stack.limit = @min(stack.limit, c.bounds.limit);
     c.* = undefined;
-    return s;
 }
 
 /// Saves the running context into `from` and runs `to`, sending `message`.
@@ -100,21 +97,22 @@ pub fn stackPointer(c: *const Context) usize {
     return c.registers.sp;
 }
 
-/// The return addresses of a context made by `init`, innermost first, into
-/// `out`, ending at its first frame. Called from the context's own code, the
-/// trace starts at the caller of `trace`; for a suspended context, at the
-/// code that switched away. A suspended context's trace is empty where frame
-/// records cannot be followed (frame pointers omitted, or Windows x64), and
-/// a running one's where neither they nor the system's unwinder can be.
-pub noinline fn trace(c: *const Context, out: []usize) []usize {
-    return c.traceFrom(@returnAddress(), out);
+/// The return addresses of a context made by `init` on `stack`, innermost
+/// first, into `out`, ending at its first frame. Called from the context's
+/// own code, the trace starts at the caller of `trace`; for a suspended
+/// context, at the code that switched away. A suspended context's trace is
+/// empty where frame records cannot be followed (frame pointers omitted, or
+/// Windows x64), and a running one's where neither they nor the system's
+/// unwinder can be.
+pub noinline fn trace(c: *const Context, stack: *const Stack, out: []usize) []usize {
+    return c.traceFrom(stack, @returnAddress(), out);
 }
 
 /// As `trace`, starting at the frame that returns to `first_address`
 /// (an earlier frame's call site, which the caller kept), or at the
 /// innermost frame when `first_address` is none of them.
-pub noinline fn traceFrom(c: *const Context, first_address: usize, out: []usize) []usize {
-    const s = c.stack orelse return out[0..0];
+pub noinline fn traceFrom(c: *const Context, stack: *const Stack, first_address: usize, out: []usize) []usize {
+    const s = stack;
     if (s.contains(trace_.stackPointer())) return trace_.here(first_address, s.bottom, s.end, out);
     const walked = trace_.walk(c.registers.fp, s.bottom, s.end, out);
     const from = std.mem.findScalar(usize, walked, first_address) orelse return walked;
