@@ -6,11 +6,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- `Pool.takeExactly`: a stack of the smallest class that fits and of no other, for a scheduler that keeps its larger stacks for the work that asked for them.
+- `Pool.number`, `Pool.count` and `Pool.inUse`: each stack's number among all the pool's, stable for the pool's life, for tables kept beside it; how many it holds; how many are handed out.
+- `Context.traceFrom`: a context's trace from a call site the caller kept.
+
+### Changed
+
+- `handoff.switchTo` is inline, as `switchTo` is: a call returned to from another context costs the return predictor a miss.
+
+### Fixed
+
+- `Pool.sizes` reads each class in place: it copied them, their free lists' atomic heads included, which a take or a give on another thread could be writing.
+- The 0.1.0 section of this changelog listed the first release under Breaking; it is Added.
+
 ## [0.1.0] - 2026-10-13
-
-### Breaking
-
-- The first release. Below 1.0 a minor release may change what the one before it shipped; this one starts the line at 0.1.0.
 
 ### Added
 

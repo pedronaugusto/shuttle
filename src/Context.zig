@@ -14,6 +14,7 @@
 const Context = @This();
 
 const builtin = @import("builtin");
+const std = @import("std");
 const native = @import("arch.zig").native;
 const Stack = @import("Stack.zig");
 const sanitizer = @import("sanitizer.zig");
@@ -106,7 +107,17 @@ pub fn stackPointer(c: *const Context) usize {
 /// records cannot be followed (frame pointers omitted, or Windows x64), and
 /// a running one's where neither they nor the system's unwinder can be.
 pub noinline fn trace(c: *const Context, out: []usize) []usize {
+    return c.traceFrom(@returnAddress(), out);
+}
+
+/// As `trace`, starting at the frame that returns to `first_address`
+/// (an earlier frame's call site, which the caller kept), or at the
+/// innermost frame when `first_address` is none of them.
+pub noinline fn traceFrom(c: *const Context, first_address: usize, out: []usize) []usize {
     const s = c.stack orelse return out[0..0];
-    if (s.contains(trace_.stackPointer())) return trace_.here(@returnAddress(), s.bottom, s.end, out);
-    return trace_.walk(c.registers.fp, s.bottom, s.end, out);
+    if (s.contains(trace_.stackPointer())) return trace_.here(first_address, s.bottom, s.end, out);
+    const walked = trace_.walk(c.registers.fp, s.bottom, s.end, out);
+    const from = std.mem.findScalar(usize, walked, first_address) orelse return walked;
+    @memmove(out[0 .. walked.len - from], walked[from..]);
+    return out[0 .. walked.len - from];
 }

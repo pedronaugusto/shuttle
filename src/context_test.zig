@@ -122,6 +122,11 @@ test "a context's trace ends at its first frame, inside its stack, whether it is
     // From the switch: the same frames, the one that called trace aside.
     try std.testing.expect(len >= 5 and len < suspended.len);
     try std.testing.expectEqualSlices(usize, Probe.running[Probe.running_len - 4 ..][0..4], suspended[len - 4 ..][0..4]);
+    // From a call site the caller kept (the one in `run`, which only one
+    // frame returns to): the frames from there on.
+    var from: [64]usize = undefined;
+    const first = Probe.running[Probe.running_len - 2];
+    try std.testing.expectEqualSlices(usize, Probe.running[Probe.running_len - 2 .. Probe.running_len], Probe.task.traceFrom(first, &from));
 }
 
 test "std's own stack walk on a context's stack ends at the context's first frame" {

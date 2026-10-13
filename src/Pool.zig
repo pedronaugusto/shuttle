@@ -59,6 +59,8 @@ pub const InitError = error{
 };
 
 classes: []Shelf,
+/// Stacks handed out and not given back.
+in_use: std.atomic.Value(u32) = .init(0),
 
 /// One class's stacks.
 const Shelf = struct {
@@ -66,6 +68,8 @@ const Shelf = struct {
     /// A stack and the guard below it.
     stride: usize,
     count: u32,
+    /// The number of the class's first stack among all the pool's.
+    first: u32 = 0,
     slabs: []memory.Pages,
     /// Per stack, the next free one, plus one; zero ends the list.
     links: []u32,
@@ -177,12 +181,18 @@ pub fn init(gpa: std.mem.Allocator, options: Options) InitError!Pool {
         }
     }.less);
     for (shelves[1..], shelves[0..shelves.len -| 1]) |s, before| if (s.layout.usable == before.layout.usable) return error.InvalidClasses;
+    var total: u32 = 0;
+    for (shelves) |*s| {
+        s.first = total;
+        total = std.math.add(u32, total, s.count) catch return error.TooManyStacks;
+    }
     try checkMapCount(shelves);
     return .{ .classes = shelves };
 }
 
 /// Releases every stack. None may be in use.
 pub fn deinit(p: *Pool, gpa: std.mem.Allocator) void {
+    std.debug.assert(p.inUse() == 0);
     for (p.classes) |*s| s.deinit(gpa);
     gpa.free(p.classes);
     p.* = undefined;
@@ -194,19 +204,37 @@ pub fn deinit(p: *Pool, gpa: std.mem.Allocator) void {
 pub fn take(p: *Pool, size: Bytes) ?Stack {
     for (p.classes, 0..) |*s, class| {
         if (Bytes.fromRaw(s.layout.usable).compare(size) == .lt) continue;
-        const index = s.pop() orelse continue;
-        var stack = s.stack(@intCast(class), index); // safe: `init` refuses more classes than a u16 names
-        if (is_windows and s.limits[index] == 0) {
-            stack.prepare(s.layout.commit) catch {
-                s.push(index);
-                continue;
-            };
-            s.limits[index] = stack.limit;
-        }
-        stack.register();
-        return stack;
+        return p.takeFrom(@intCast(class)) orelse continue; // safe: `init` refuses more classes than a u16 names
     }
     return null;
+}
+
+/// A stack of the smallest class with at least `size` usable bytes, and of
+/// no other: null when that class has none free, or none is that large. For
+/// a scheduler that keeps its larger stacks for the work that asked for
+/// them.
+pub fn takeExactly(p: *Pool, size: Bytes) ?Stack {
+    for (p.classes, 0..) |*s, class| {
+        if (Bytes.fromRaw(s.layout.usable).compare(size) == .lt) continue;
+        return p.takeFrom(@intCast(class)); // safe: `init` refuses more classes than a u16 names
+    }
+    return null;
+}
+
+fn takeFrom(p: *Pool, class: u16) ?Stack {
+    const s = &p.classes[class];
+    const index = s.pop() orelse return null;
+    var stack = s.stack(class, index);
+    if (is_windows and s.limits[index] == 0) {
+        stack.prepare(s.layout.commit) catch {
+            s.push(index);
+            return null;
+        };
+        s.limits[index] = stack.limit;
+    }
+    stack.register();
+    _ = p.in_use.fetchAdd(1, .monotonic);
+    return stack;
 }
 
 /// Gives back a stack `take` handed out. Nothing may run on it.
@@ -217,12 +245,34 @@ pub fn give(p: *Pool, stack: Stack) void {
     const shelf = &p.classes[slot.class];
     if (is_windows) shelf.limits[slot.index] = @min(shelf.limits[slot.index], s.limit);
     shelf.push(slot.index);
+    // Zero publishes the last give after it stopped touching the pool.
+    _ = p.in_use.fetchSub(1, .release);
+}
+
+/// The stacks handed out and not given back.
+pub fn inUse(p: *const Pool) u32 {
+    return p.in_use.load(.acquire);
+}
+
+/// How many stacks the pool holds, all classes together.
+pub fn count(p: *const Pool) u32 {
+    if (p.classes.len == 0) return 0;
+    const last = p.classes[p.classes.len - 1];
+    return last.first + last.count;
+}
+
+/// A stack's number among all the pool's, below `count()` and the same for
+/// as long as the pool lives: what a table kept beside the pool, one entry a
+/// stack, is indexed by.
+pub fn number(p: *const Pool, stack: Stack) u32 {
+    const slot = stack.slot.?;
+    return p.classes[slot.class].first + slot.index;
 }
 
 /// The usable size of each class, smallest first.
 pub fn sizes(p: *const Pool, out: []Bytes) []Bytes {
     const n = @min(out.len, p.classes.len);
-    for (p.classes[0..n], out[0..n]) |s, *o| o.* = .fromRaw(s.layout.usable);
+    for (p.classes[0..n], out[0..n]) |*s, *o| o.* = .fromRaw(s.layout.usable);
     return out[0..n];
 }
 

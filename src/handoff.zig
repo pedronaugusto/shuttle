@@ -31,7 +31,9 @@ const Note = struct { from: *Context, after: ?After };
 /// Saves the running context into `from` and runs `to`, which runs
 /// `after` first. Returns when a switch of this module resumes `from`,
 /// once that switch's own `after` has run.
-pub fn switchTo(from: *Context, to: *Context, after: ?After) void {
+/// Inline, as `Context.switchTo` is: a call returned to from another
+/// context costs the return predictor a miss.
+pub inline fn switchTo(from: *Context, to: *Context, after: ?After) void {
     var note: Note = .{ .from = from, .after = after };
     finish(Context.switchTo(from, to, &note));
 }

@@ -158,3 +158,57 @@ test "a pool hands out the smallest class that fits, keeps guards between its st
     try std.testing.expectEqual(taken[taken.len - 1].bottom, again.bottom);
     pool.give(again);
 }
+
+test "a pool numbers its stacks once across its classes, counts those in use, and can keep to one class" {
+    if (!supported) return error.SkipZigTest;
+    var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{
+        .{ .size = .fromRaw(256 * 1024), .count = 2 },
+        .{ .size = .fromRaw(32 * 1024), .count = 3 },
+    } });
+    defer pool.deinit(std.testing.allocator);
+    try std.testing.expectEqual(@as(u32, 5), pool.count());
+    var taken: [5]@import("Stack.zig") = undefined;
+    var seen: [5]bool = @splat(false);
+    for (&taken, 0..) |*s, i| {
+        s.* = pool.take(.fromRaw(16 * 1024)).?;
+        try std.testing.expectEqual(@as(u32, @intCast(i + 1)), pool.inUse());
+        const n = pool.number(s.*);
+        try std.testing.expect(n < pool.count() and !seen[n]);
+        seen[n] = true;
+    }
+    for (taken) |s| pool.give(s);
+    try std.testing.expectEqual(@as(u32, 0), pool.inUse());
+    // Only the small class, though the large one has stacks free.
+    var small: [3]@import("Stack.zig") = undefined;
+    for (&small) |*s| s.* = pool.takeExactly(.fromRaw(16 * 1024)).?;
+    try std.testing.expect(pool.takeExactly(.fromRaw(16 * 1024)) == null);
+    try std.testing.expect(pool.takeExactly(.fromRaw(1024 * 1024)) == null);
+    for (small) |s| pool.give(s);
+}
+
+test "threads take and give a pool's stacks at once, each stack held by one at a time" {
+    if (!supported or builtin.single_threaded) return error.SkipZigTest;
+    const Churn = struct {
+        fn run(pool: *Pool, owners: []std.atomic.Value(u32), me: u32) void {
+            for (0..2000) |round| {
+                const size: @import("Stack.zig").Bytes = .fromRaw(if (round % 3 == 0) 128 * 1024 else 16 * 1024);
+                const s = (if (round % 2 == 0) pool.take(size) else pool.takeExactly(size)) orelse continue;
+                const n = pool.number(s);
+                // Nobody else holds it.
+                if (owners[n].swap(me, .acq_rel) != 0) @panic("a stack handed out twice");
+                owners[n].store(0, .release);
+                pool.give(s);
+            }
+        }
+    };
+    var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{
+        .{ .size = .fromRaw(32 * 1024), .count = 6 },
+        .{ .size = .fromRaw(256 * 1024), .count = 3 },
+    } });
+    defer pool.deinit(std.testing.allocator);
+    var owners: [9]std.atomic.Value(u32) = @splat(.init(0));
+    var threads: [4]std.Thread = undefined;
+    for (&threads, 1..) |*t, me| t.* = try std.Thread.spawn(.{}, Churn.run, .{ &pool, &owners, @as(u32, @intCast(me)) });
+    for (threads) |t| t.join();
+    try std.testing.expectEqual(@as(u32, 0), pool.inUse());
+}

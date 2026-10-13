@@ -198,9 +198,10 @@ its `try` unwinds it through its defers.
 | `stack.carve(len, alignment)`, `stack.discard(keep_from)` | Takes bytes from the top for what lives as long as the stack; gives pages below a point back to the system |
 | `Pool.init(gpa, .{ .classes, .guard, .commit })`, `pool.deinit(gpa)` | Stacks in size classes, reserved once |
 | `pool.take(size)`, `pool.give(stack)` | The smallest class that fits and has a stack free, or null; a stack back. Any thread |
+| `pool.takeExactly(size)`, `pool.number(stack)`, `pool.count()`, `pool.inUse()` | Only the smallest class that fits; a stack's stable number among all the pool's; how many it holds; how many are out |
 | `Context.init(stack, entry, arg)`, `context.deinit()` | A context that runs `entry(arg, message)` when first switched to; ended, its stack given back |
 | `switchTo(from, to, message)` | Saves the running context into `from`, runs `to`, and returns the message of the switch that resumes `from` |
-| `context.trace(out)`, `context.stackPointer()` | A context's return addresses to its first frame, running or suspended; where a suspended one's stack ends |
+| `context.trace(out)`, `context.traceFrom(first, out)`, `context.stackPointer()` | A context's return addresses to its first frame, running or suspended, from the caller or from a kept call site; where a suspended one's stack ends |
 | `handoff.switchTo(from, to, after)`, `handoff.entry(body)` | A switch whose `after` runs on the side switched to once `from` is saved; the entry of a context switched to that way |
 | `Coroutine(Input, Yield, Return)` | `init(stack, body, args)`, `next(input)`, `tryNext(input)`, `state()`, `done()`, `panicked()`, `deinit()` |
 | `Coroutine(...).Yielder.yield(value)` | Hands `value` to the code running the coroutine and returns its next input, or `error.Canceled` |
