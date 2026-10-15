@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A coroutine's `enter` takes its thread's slot afresh after the switch back: the compiler could reuse the slot's address computed before the switch, which on aarch64 is a register read it merges, so a runtime that moved the task running the coroutine to another thread meanwhile (reactor's) wrote the thread it left. The slot now passes through an assembly statement, as reactor's seat does; `running` reads it the same way.
+
 ## [0.2.2] - 2026-10-14
 
 ### Changed
