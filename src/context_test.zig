@@ -142,18 +142,20 @@ test "a context's trace ends at its first frame, inside its stack, whether it is
     defer end(&Probe.task);
     _ = Context.switchTo(&Probe.driver, &Probe.task, null);
     // deeper four times and run, and the walk stopped short of its room.
+    // Below run, the trampoline's frame where it calls the entry; on Windows
+    // it branches in with no return address, which ends the walk at run.
     try std.testing.expect(Probe.running_len >= 5 and Probe.running_len < Probe.running.len);
     if (!walking.suspended_available) return;
     var suspended: [64]usize = undefined;
     const len = Probe.task.trace(stackOf(&Probe.task), &suspended).len;
     // From the switch: the same frames, the one that called trace aside.
-    try std.testing.expect(len >= 5 and len < suspended.len);
-    try std.testing.expectEqualSlices(usize, Probe.running[Probe.running_len - 4 ..][0..4], suspended[len - 4 ..][0..4]);
+    try std.testing.expectEqualSlices(usize, Probe.running[1..Probe.running_len], suspended[0..len]);
     // From a call site the caller kept (the one in `run`, which only one
-    // frame returns to): the frames from there on.
+    // frame returns to, after the call that called trace and the three
+    // calls deeper): the frames from there on.
     var from: [64]usize = undefined;
-    const first = Probe.running[Probe.running_len - 2];
-    try std.testing.expectEqualSlices(usize, Probe.running[Probe.running_len - 2 .. Probe.running_len], Probe.task.traceFrom(stackOf(&Probe.task), first, &from));
+    const first = Probe.running[4];
+    try std.testing.expectEqualSlices(usize, Probe.running[4..Probe.running_len], Probe.task.traceFrom(stackOf(&Probe.task), first, &from));
 }
 
 test "std's own stack walk on a context's stack ends at the context's first frame" {
