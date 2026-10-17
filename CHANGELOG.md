@@ -6,9 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-17
+
 ### Breaking
 
-- A pool makes a stack usable the first time it hands it out, not at `init`: `Pool.init` reserves every stack's address space in one mapping that faults on any access and does nothing per stack, so a pool of 16,384 stacks starts in microseconds with no page tables, where guarding each took 9 ms on a Mac and 16.5 ms on Linux and about 8 MiB of page tables, and as long again to release. A stack made usable (committed as touched, its guard below it) stays so for the pool's life. `take` and `takeExactly` return `TakeError!?Stack`: null when no stack is free, as before, and `error.SystemResources` when the system refused to make a fresh one usable (strict overcommit, `vm.max_map_count`, the Windows commit limit); the stack stays in the pool and a later `take` tries it again.
+- A pool makes a stack usable the first time it hands it out, not at `init`: `Pool.init` reserves every stack's address space in one mapping that faults on any access and does nothing per stack, so a pool of 16,384 stacks is one mapping with no page tables, where guarding each took 9 ms on a Mac and 16.5 ms on Linux, about 8 MiB of page tables, and as long again to release (reactor's `init` on its defaults: 7 ms to 0.7 on a Mac, 18 ms to 0.8 on Linux). A stack made usable (committed as touched, its guard below it) stays so for the pool's life. `take` and `takeExactly` return `TakeError!?Stack`: null when no stack is free, as before, and `error.SystemResources` when the system refused to make a fresh one usable (strict overcommit, `vm.max_map_count`, the Windows commit limit); the stack stays in the pool and a later `take` tries it again.
 - `Stack.prepare(commit, guard)` takes what guards the stack (`Stack.Guard`: the reservation's no-access pages, or a Linux guard region); a stack's reservation is no-access until prepared, everywhere.
 - `Pool.per_slab` is gone: a pool's stacks are one reservation.
 
