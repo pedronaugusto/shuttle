@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-10-17
+
 ### Fixed
 
 - The trace test expected a frame below a context's entry, which the trampoline's call leaves everywhere but on Windows, where it branches in: a suspended context's trace is now held to be the running one less the frame that called `trace` (the windows-11-arm nightly's red).
