@@ -106,9 +106,9 @@ larger than the guard can step over it. `Options.guard` makes it larger.
 `Pool.init` guarantees the reservation and the counts, and does nothing per
 stack: every stack of every class is laid out, each with its own guard, in one
 mapping that faults on any access. No later step fails for address space, and
-a pool of 16,384 stacks starts in microseconds holding no page tables (it was
-9 ms on a Mac and 16.5 ms on Linux, with about 8 MiB of page tables, when
-`init` guarded every stack). A stack is made usable the first time it is
+a pool of 16,384 stacks is one mapping holding no page tables (it was 9 ms on
+a Mac and 16.5 ms on Linux, with about 8 MiB of page tables, when `init`
+guarded every stack). A stack is made usable the first time it is
 handed out and stays so for the pool's life, so taking it again makes no
 system call; the stacks in use cost what their code touches, the rest cost
 address space.

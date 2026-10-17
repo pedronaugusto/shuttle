@@ -5,8 +5,8 @@
 //! `init` reserves the address space of every stack of every class as one
 //! mapping that faults on any access, and does nothing per stack: that
 //! reservation and the classes' counts are what it guarantees. No later step
-//! fails for address space, and a pool of thousands of stacks starts in
-//! microseconds, holding no page tables. A stack is made usable the first
+//! fails for address space, and a pool of thousands of stacks costs a few
+//! system calls, holding no page tables. A stack is made usable the first
 //! time it is handed out (`Stack.prepare`: its bytes readable and writable,
 //! committed as they are touched, or on Windows its top committed; its guard
 //! below it) and stays so for the pool's life: one given back is handed out
