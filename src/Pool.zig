@@ -29,8 +29,10 @@
 //!
 //! Free stacks are a lock-free stack of indices, tagged against reuse, and
 //! the last stack given back is the first handed out, so the stacks in use
-//! stay the warm ones. A stack never handed out is taken only when none
-//! given back is free.
+//! stay the warm ones; a stack on it is usable, so taking one is a pop and
+//! nothing more. Only when none is free does `take` make one: a stack the
+//! system refused before (kept on a list of its own), else one never handed
+//! out.
 const Pool = @This();
 
 const builtin = @import("builtin");
@@ -89,15 +91,18 @@ const Shelf = struct {
     first: u32 = 0,
     /// The lowest byte of the class's stacks, in the pool's reservation.
     base: usize = 0,
-    /// Per stack, the next free one, plus one; zero ends the list.
+    /// Per stack, the next on its list, plus one; zero ends the list.
     links: []u32,
-    free: std.atomic.Value(u64) = .init(0),
+    /// Stacks made usable and given back: what `take` hands out first,
+    /// as they are.
+    free: List = .{},
+    /// Stacks the system refused to make usable, to be tried again.
+    unmade: List = .{},
     /// The stacks from this one up have never been handed out.
     fresh: std.atomic.Value(u32) = .init(0),
-    /// Per stack, its lowest committed byte; zero until it has been made
-    /// usable. Only the stack's holder touches its entry, and only stacks
-    /// below `fresh` have one.
-    limits: []usize,
+    /// Windows: per stack, its lowest committed byte. Only the stack's
+    /// holder touches its entry, and only stacks below `fresh` have one.
+    limits: if (is_windows) []usize else void,
     /// Under Valgrind, each stack's registration, made when it is first
     /// made usable and kept for the pool's life; empty elsewhere.
     valgrind: []usize,
@@ -106,8 +111,8 @@ const Shelf = struct {
         const layout = try Stack.Layout.of(.{ .size = class.size, .guard = options.guard, .commit = options.commit });
         const links = try gpa.alloc(u32, class.count);
         errdefer gpa.free(links);
-        const limits = try gpa.alloc(usize, class.count);
-        errdefer gpa.free(limits);
+        const limits = if (is_windows) try gpa.alloc(usize, class.count) else {};
+        errdefer if (is_windows) gpa.free(limits);
         var valgrind: []usize = &.{};
         if (std.valgrind.runningOnValgrind() > 0) {
             valgrind = try gpa.alloc(usize, class.count);
@@ -120,7 +125,7 @@ const Shelf = struct {
         for (s.valgrind) |id| if (id != 0) std.valgrind.stackDeregister(id);
         if (s.valgrind.len > 0) gpa.free(s.valgrind);
         gpa.free(s.links);
-        gpa.free(s.limits);
+        if (is_windows) gpa.free(s.limits);
     }
 
     /// The bytes of all the class's stacks.
@@ -141,38 +146,41 @@ const Shelf = struct {
         };
     }
 
-    fn pop(s: *Shelf) ?u32 {
-        var raw = s.free.load(.acquire);
+    /// A stack never handed out, now the caller's, or null when none is
+    /// left.
+    fn claim(s: *Shelf) ?u32 {
+        var next = s.fresh.load(.monotonic);
+        while (next < s.count) {
+            next = s.fresh.cmpxchgWeak(next, next + 1, .monotonic, .monotonic) orelse return next;
+        }
+        return null;
+    }
+};
+
+/// A lock-free stack of a class's stack indices, linked through the
+/// class's `links`, its head tagged against reuse.
+const List = struct {
+    head: std.atomic.Value(u64) = .init(0),
+
+    fn pop(l: *List, links: []u32) ?u32 {
+        var raw = l.head.load(.acquire);
         while (true) {
             const f: Free = @bitCast(raw);
             if (f.index_plus_one == 0) return null;
             const index = f.index_plus_one - 1;
-            const next: Free = .{ .index_plus_one = @atomicLoad(u32, &s.links[index], .monotonic), .tag = f.tag +% 1 };
-            raw = s.free.cmpxchgWeak(raw, @bitCast(next), .acq_rel, .acquire) orelse return index;
+            const next: Free = .{ .index_plus_one = @atomicLoad(u32, &links[index], .monotonic), .tag = f.tag +% 1 };
+            raw = l.head.cmpxchgWeak(raw, @bitCast(next), .acq_rel, .acquire) orelse return index;
         }
     }
 
-    fn push(s: *Shelf, index: u32) void {
-        var raw = s.free.load(.monotonic);
+    fn push(l: *List, links: []u32, index: u32) void {
+        var raw = l.head.load(.monotonic);
         while (true) {
             const f: Free = @bitCast(raw);
-            @atomicStore(u32, &s.links[index], f.index_plus_one, .monotonic);
+            @atomicStore(u32, &links[index], f.index_plus_one, .monotonic);
             const next: Free = .{ .index_plus_one = index + 1, .tag = f.tag +% 1 };
-            raw = s.free.cmpxchgWeak(raw, @bitCast(next), .release, .monotonic) orelse return;
+            raw = l.head.cmpxchgWeak(raw, @bitCast(next), .release, .monotonic) orelse return;
         }
-    }
-
-    /// A stack never handed out, now the caller's, or null when none is
-    /// left. Its `limits` entry is zero.
-    fn claim(s: *Shelf) ?u32 {
-        var next = s.fresh.load(.monotonic);
-        while (next < s.count) {
-            next = s.fresh.cmpxchgWeak(next, next + 1, .monotonic, .monotonic) orelse {
-                s.limits[next] = 0;
-                return next;
-            };
-        }
-        return null;
     }
 };
 
@@ -226,16 +234,12 @@ pub fn deinit(p: *Pool, gpa: std.mem.Allocator) void {
 /// free stack could not be made usable is passed over for a larger one;
 /// `error.SystemResources` when none could be had and one was refused.
 pub fn take(p: *Pool, size: Bytes) TakeError!?Stack {
-    var refused = false;
     for (p.classes, 0..) |*s, class| {
         if (Bytes.fromRaw(s.layout.usable).compare(size) == .lt) continue;
-        const stack = p.takeFrom(@intCast(class)) catch { // safe: `init` refuses more classes than a u16 names
-            refused = true;
-            continue;
-        };
-        return stack orelse continue;
+        if (s.free.pop(s.links)) |index| return p.handOut(@intCast(class), index); // safe: `init` refuses more classes than a u16 names
+        return p.makeFrom(@intCast(class)); // safe: as above
     }
-    return if (refused) error.SystemResources else null;
+    return null;
 }
 
 /// A stack of the smallest class with at least `size` usable bytes, and of
@@ -245,30 +249,53 @@ pub fn take(p: *Pool, size: Bytes) TakeError!?Stack {
 pub fn takeExactly(p: *Pool, size: Bytes) TakeError!?Stack {
     for (p.classes, 0..) |*s, class| {
         if (Bytes.fromRaw(s.layout.usable).compare(size) == .lt) continue;
-        return p.takeFrom(@intCast(class)); // safe: `init` refuses more classes than a u16 names
+        if (s.free.pop(s.links)) |index| return p.handOut(@intCast(class), index); // safe: `init` refuses more classes than a u16 names
+        return p.make(@intCast(class)); // safe: as above
     }
     return null;
 }
 
-fn takeFrom(p: *Pool, class: u16) TakeError!?Stack {
-    const s = &p.classes[class];
-    const index = s.pop() orelse s.claim() orelse return null;
-    if (s.limits[index] == 0) {
-        var stack = s.stack(class, index);
-        stack.prepare(s.layout.commit, p.guard) catch {
-            s.push(index);
-            return error.SystemResources;
+/// `take` once `first`, the smallest class that fits, has none given
+/// back: a stack made in it, else the next class's, and so on. Out of the
+/// way of `take`, whose own code stays a pop.
+fn makeFrom(p: *Pool, first: u16) TakeError!?Stack {
+    @branchHint(.cold);
+    var refused = false;
+    for (p.classes[first..], first..) |*s, at| {
+        const class: u16 = @intCast(at); // safe: `init` refuses more classes than a u16 names
+        if (class != first) if (s.free.pop(s.links)) |index| return p.handOut(class, index);
+        const stack = p.make(class) catch {
+            refused = true;
+            continue;
         };
-        s.limits[index] = stack.limit;
-        // Valgrind is told of the stack once: a stack handed out is
-        // described by its number alone, and carries no registration.
-        if (s.valgrind.len > 0) {
-            stack.register();
-            s.valgrind[index] = stack.valgrind;
-        }
+        return stack orelse continue;
     }
+    return if (refused) error.SystemResources else null;
+}
+
+/// None given back: a stack refused before, or one never handed out, made
+/// usable now.
+fn make(p: *Pool, class: u16) TakeError!?Stack {
+    const s = &p.classes[class];
+    const index = s.unmade.pop(s.links) orelse s.claim() orelse return null;
+    var stack = s.stack(class, index);
+    stack.prepare(s.layout.commit, p.guard) catch {
+        s.unmade.push(s.links, index);
+        return error.SystemResources;
+    };
+    if (is_windows) s.limits[index] = stack.limit;
+    // Valgrind is told of the stack once: a stack handed out is described
+    // by its number alone, and carries no registration.
+    if (s.valgrind.len > 0) {
+        stack.register();
+        s.valgrind[index] = stack.valgrind;
+    }
+    return p.handOut(class, index);
+}
+
+fn handOut(p: *Pool, class: u16, index: u32) Stack {
     _ = p.in_use.fetchAdd(1, .monotonic);
-    return s.stack(class, index);
+    return p.classes[class].stack(class, index);
 }
 
 /// Gives back a stack `take` handed out, or one `stackOf` described. Nothing
@@ -278,7 +305,7 @@ pub fn give(p: *Pool, stack: Stack) void {
     const slot = s.slot.?;
     const shelf = &p.classes[slot.class];
     if (is_windows) shelf.limits[slot.index] = @min(shelf.limits[slot.index], s.limit);
-    shelf.push(slot.index);
+    shelf.free.push(shelf.links, slot.index);
     // Zero publishes the last give after it stopped touching the pool.
     _ = p.in_use.fetchSub(1, .release);
 }
