@@ -17,10 +17,10 @@ under `src/`.
 
 | Layer | Files and responsibility |
 |---|---|
-| Platform | `memory.zig` reserves, guards, commits and releases address space; `teb.zig` reads and writes the Windows thread information block's stack fields; `sanitizer.zig` is ThreadSanitizer's fiber interface; `arch/x86_64.zig`, `arch/aarch64.zig` and `arch/riscv64.zig` own each architecture's switch, control state, first frame and trampoline. |
+| Platform | `memory.zig` reserves, commits, guards and releases address space; `teb.zig` reads and writes the Windows thread information block's stack fields; `sanitizer.zig` is ThreadSanitizer's fiber interface; `arch/x86_64.zig`, `arch/aarch64.zig` and `arch/riscv64.zig` own each architecture's switch, control state, first frame and trampoline. |
 | The switch | `arch.zig` picks this architecture's. |
 | Traces and stacks | `trace.zig` walks frame records inside given bounds; `Stack.zig` owns one stack: its layout, guard, Windows commit and Valgrind registration. |
-| Pools and contexts | `Pool.zig` owns size classes of stacks, their free lists, and their Valgrind registrations for the pool's life; `Context.zig` owns a context's saved state and `switchTo`. A context is what a switch saves and no more (registers; on Windows the stack bounds; under ThreadSanitizer the fiber): the stack it runs on is its maker's, and `init`, `deinit` and the traces are given it, so a scheduler that keeps thousands of contexts keeps only a stack's number beside each (`Pool.number`, `Pool.stackOf`). |
+| Pools and contexts | `Pool.zig` owns size classes of stacks in one reservation, their free lists, which stacks have been made usable, and their Valgrind registrations for the pool's life; `Context.zig` owns a context's saved state and `switchTo`. A context is what a switch saves and no more (registers; on Windows the stack bounds; under ThreadSanitizer the fiber): the stack it runs on is its maker's, and `init`, `deinit` and the traces are given it, so a scheduler that keeps thousands of contexts keeps only a stack's number beside each (`Pool.number`, `Pool.stackOf`). |
 | Handoff and panics | `handoff.zig` owns the switch whose other side finishes it; `Panic.zig` owns a coroutine's recorded panic and its printing. |
 | Coroutines | `coroutine.zig` owns `Coroutine`, the thread's running coroutine and the panic handler. |
 | Generators and overflows | `generator.zig` wraps a coroutine as an iterator; `overflow.zig` names a stack overflow. |
@@ -83,28 +83,53 @@ stack.
 ## Stacks
 
 A stack is reserved address space: a guard below the usable bytes, then the
-usable bytes. Elsewhere than Windows the guard is a guard region where Linux
-has them (6.13 and later; no mapping of its own) and `PROT_NONE` otherwise,
-and the usable bytes are committed by the system as they are touched; the
-mapping is marked as a stack where the system has the mark (OpenBSD refuses a
-stack pointer into memory without it). On Windows the top pages are committed
-when the stack is made, with a guard page below them; the system commits
-further pages as the stack grows, because the switch keeps the thread
-information block's bounds on the running stack; the guard below the stack is
-never committed, and reaching it raises the system's stack overflow.
-`Stack.reach` commits what the thread making a context writes there, since the
-system grows a stack only for the thread running on it.
+usable bytes. It is reserved so that any access faults, and made usable by
+`Stack.prepare`. Elsewhere than Windows the usable bytes are made readable and
+writable and the system commits each page as it is touched; the guard is the
+reservation's own no-access pages, or, where Linux has guard regions (6.13 and
+later), a guard region in committed memory, which splits no mapping. On Linux
+the reservation is marked as a stack (no transparent huge pages, 6.7 and later)
+and charged no swap; OpenBSD, which refuses a stack pointer into memory not
+mapped as a stack and maps a stack only read-write, maps the usable bytes again
+in place. On Windows the top pages are committed, with a guard page below them;
+the system commits further pages as the stack grows, because the switch keeps
+the thread information block's bounds on the running stack; the guard below
+the stack is never committed, and reaching it raises the system's stack
+overflow. `Stack.reach` commits what the thread making a context writes there,
+since the system grows a stack only for the thread running on it.
 
 Zig emits no stack probes on aarch64, nor on x86_64 in ReleaseFast: a frame
 larger than the guard can step over it. `Options.guard` makes it larger.
 
-A `Pool` reserves each class's stacks in slabs of 64, each stack with its own
-guard. Free stacks are a lock-free stack of indices with a tag against reuse;
-the last stack given back is the next handed out, so the stacks in use stay
-warm. A guard page on Linux splits its slab's mapping, so `init` refuses a
-count that would reach `vm.max_map_count`. On Windows a stack's first pages are
-committed the first time it is handed out, and a stack given back keeps what
-its code committed.
+### Pools
+
+`Pool.init` guarantees the reservation and the counts, and does nothing per
+stack: every stack of every class is laid out, each with its own guard, in one
+mapping that faults on any access. No later step fails for address space, and
+a pool of 16,384 stacks starts in microseconds holding no page tables (it was
+9 ms on a Mac and 16.5 ms on Linux, with about 8 MiB of page tables, when
+`init` guarded every stack). A stack is made usable the first time it is
+handed out and stays so for the pool's life, so taking it again makes no
+system call; the stacks in use cost what their code touches, the rest cost
+address space.
+
+Making a stack usable can fail mid-run, where the system refuses the charge:
+Linux under strict overcommit (the reservation is charged nothing; a commit
+is charged), Linux at `vm.max_map_count`, Windows at its commit limit, or a
+guard region the kernel cannot install. That is `error.SystemResources` from
+`take`, never a crash: the stack goes back on the free list unmade, and the
+next `take` tries it again. A scheduler maps the error to its spawn's
+refusal (reactor: `error.ConcurrencyUnavailable`).
+
+Free stacks are a lock-free stack of indices with a tag against reuse; the
+last stack given back is the next handed out, so the stacks in use stay warm,
+and a stack never handed out (each class's next, by an atomic counter) is
+taken only when no stack given back is free, so the stacks a program has made
+are the ones it uses. Without guard regions each stack made usable is a
+mapping of its own beside a no-access one, about two entries per stack against
+Linux's `vm.max_map_count`, so `init` refuses a count that could reach it;
+with them stacks made side by side merge into one mapping. On Windows a stack
+given back keeps what its code committed.
 
 ## Coroutines
 
@@ -173,7 +198,7 @@ thread after another. What that asks of the code:
 ## Not done
 
 - A coroutine cannot be unwound past a panic, as Zig has no unwinding.
-- Valgrind is told of every stack, and CI runs no test under it.
+- Valgrind is told of every stack made usable, and CI runs no test under it.
 - aarch64 Linux and aarch64 Windows compile in CI and are not run there:
   preflight's runners are x86_64 Linux and Windows and arm64 macOS.
 - riscv64 is compiled only.

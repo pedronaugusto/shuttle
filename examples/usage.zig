@@ -102,7 +102,7 @@ fn jobs() !void {
     } });
     defer pool.deinit(gpa);
     var worker: shuttle.Context = .{};
-    var job: Job = .{ .context = undefined, .stack = pool.take(.fromRaw(16 * 1024)).?, .worker = &worker };
+    var job: Job = .{ .context = undefined, .stack = (try pool.take(.fromRaw(16 * 1024))).?, .worker = &worker };
     job.context = try .init(&job.stack, shuttle.handoff.entry(work), &job);
     shuttle.handoff.switchTo(&worker, &job.context, null);
     std.debug.assert(job.done);

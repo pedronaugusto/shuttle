@@ -1,5 +1,5 @@
-//! Address space for stacks: reserve it, guard it, commit it (Windows),
-//! release it, and give pages back.
+//! Address space for stacks: reserve it, commit it, guard it, release it,
+//! and give pages back.
 const builtin = @import("builtin");
 const std = @import("std");
 const posix = std.posix;
@@ -16,17 +16,19 @@ pub fn pageSize() usize {
 
 pub const Error = error{SystemResources};
 
-/// `len` bytes of address space. Elsewhere than Windows it is readable and
-/// writable and committed as it is touched, with no swap reserved for it on
-/// Linux and marked as a stack where the system has the mark (OpenBSD
-/// refuses a stack pointer into memory without it). On Windows nothing may
-/// touch it until it is committed.
+/// `len` bytes of address space that fault on any access until committed:
+/// nothing is committed or charged for them (Windows: reserved; elsewhere
+/// `PROT_NONE`, which no system counts against its commit limit). On Linux
+/// what is later committed has no swap reserved for it and is marked as a
+/// stack, which keeps transparent huge pages off it (6.7 and later).
 pub fn reserve(len: usize) Error!Pages {
     if (is_windows) return allocate(len, .{ .RESERVE = true }, .{ .NOACCESS = true });
     var flags: posix.MAP = .{ .TYPE = .PRIVATE, .ANONYMOUS = true };
     if (@hasField(posix.MAP, "NORESERVE")) flags.NORESERVE = true;
-    if (@hasField(posix.MAP, "STACK")) flags.STACK = true;
-    return posix.mmap(null, len, .{ .READ = true, .WRITE = true }, flags, -1, 0) catch error.SystemResources;
+    // Elsewhere the mark asks for read-write memory: OpenBSD's is given at
+    // commit, and FreeBSD's would make a mapping that grows of itself.
+    if (builtin.os.tag == .linux) flags.STACK = true;
+    return posix.mmap(null, len, .{}, flags, -1, 0) catch error.SystemResources;
 }
 
 fn allocate(len: usize, kind: windows.MEM.ALLOCATE, protection: windows.PAGE) Error!Pages {
@@ -53,30 +55,52 @@ pub fn release(memory: Pages) void {
     posix.munmap(memory);
 }
 
-/// Makes `memory` fault on any access. On Linux 6.13 and later a guard
-/// region, which costs no mapping; elsewhere `PROT_NONE`, which on Linux
-/// splits the mapping and so counts against `vm.max_map_count`. Returns
-/// whether the guard is a region.
-pub fn guard(memory: Pages) Error!bool {
-    if (builtin.os.tag == .linux) {
-        const madv_guard_install = 102;
-        if (std.os.linux.errno(std.os.linux.madvise(memory.ptr, memory.len, madv_guard_install)) == .SUCCESS) return true;
-    }
-    if (is_windows) return false; // reserved and never committed: already a fault
-    switch (posix.errno(posix.system.mprotect(memory.ptr, memory.len, .{}))) {
-        .SUCCESS => return false,
-        else => return error.SystemResources,
-    }
+/// Whether this kernel has guard regions (Linux 6.13 and later): one page
+/// tried and released.
+pub fn guardRegions() bool {
+    if (builtin.os.tag != .linux) return false;
+    const page = pageSize();
+    const probe = reserve(page) catch return false;
+    defer release(probe);
+    commit(probe, false) catch return false;
+    installGuard(probe) catch return false;
+    return true;
 }
 
-/// Windows: makes reserved `memory` usable; with `as_guard`, as a guard
-/// page, which turns usable on first touch and, inside the running stack's
-/// bounds, makes the system commit the page below as the next guard.
+/// Linux 6.13 and later: makes committed `memory` fault on any access as a
+/// guard region, which splits no mapping and so costs nothing against
+/// `vm.max_map_count`. It stays through `discard` and `commit`.
+pub fn installGuard(memory: Pages) Error!void {
+    if (builtin.os.tag != .linux) return error.SystemResources;
+    const madv_guard_install = 102;
+    if (std.os.linux.errno(std.os.linux.madvise(memory.ptr, memory.len, madv_guard_install)) != .SUCCESS) return error.SystemResources;
+}
+
+/// Makes reserved `memory` usable. Elsewhere than Windows it is readable
+/// and writable and the system commits each page as it is first touched;
+/// the call fails where the system refuses the charge (Linux under strict
+/// overcommit, or past `vm.max_map_count`). On Windows it is committed now;
+/// with `as_guard`, as a guard page, which turns usable on first touch and,
+/// inside the running stack's bounds, makes the system commit the page
+/// below as the next guard.
 pub fn commit(memory: Pages, as_guard: bool) Error!void {
-    if (!is_windows) return;
-    var base: windows.PVOID = memory.ptr;
-    var size: windows.SIZE_T = memory.len;
-    switch (windows.ntdll.NtAllocateVirtualMemory(windows.current_process, &base, 0, &size, .{ .COMMIT = true }, .{ .READWRITE = true, .GUARD = as_guard })) {
+    if (is_windows) {
+        var base: windows.PVOID = memory.ptr;
+        var size: windows.SIZE_T = memory.len;
+        switch (windows.ntdll.NtAllocateVirtualMemory(windows.current_process, &base, 0, &size, .{ .COMMIT = true }, .{ .READWRITE = true, .GUARD = as_guard })) {
+            .SUCCESS => return,
+            else => return error.SystemResources,
+        }
+    }
+    std.debug.assert(!as_guard);
+    if (builtin.os.tag == .openbsd) {
+        // OpenBSD refuses a stack pointer into memory not mapped as a
+        // stack, and maps one only read-write: mapped again in place.
+        const flags: posix.MAP = .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .FIXED = true, .STACK = true };
+        _ = posix.mmap(memory.ptr, memory.len, .{ .READ = true, .WRITE = true }, flags, -1, 0) catch return error.SystemResources;
+        return;
+    }
+    switch (posix.errno(posix.system.mprotect(memory.ptr, memory.len, .{ .READ = true, .WRITE = true }))) {
         .SUCCESS => {},
         else => return error.SystemResources,
     }

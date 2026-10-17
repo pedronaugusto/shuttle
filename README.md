@@ -145,7 +145,7 @@ fn jobs() !void {
     } });
     defer pool.deinit(gpa);
     var worker: shuttle.Context = .{};
-    var job: Job = .{ .context = undefined, .stack = pool.take(.fromRaw(16 * 1024)).?, .worker = &worker };
+    var job: Job = .{ .context = undefined, .stack = (try pool.take(.fromRaw(16 * 1024))).?, .worker = &worker };
     job.context = try .init(&job.stack, shuttle.handoff.entry(work), &job);
     shuttle.handoff.switchTo(&worker, &job.context, null);
     std.debug.assert(job.done);
@@ -184,8 +184,9 @@ A new context starts in a trampoline whose unwind table says nothing called
 it, under 64 zeroed bytes: debuggers, std's unwinder and shuttle's own traces
 end at a context's first frame. A stack is reserved address space with a
 guard below it; on Windows its pages are committed as it grows. A `Pool`
-reserves its stacks in size classes, each with its own guard, and hands them
-out and takes them back from any thread without allocating. ThreadSanitizer
+reserves the address space of all its stacks at once, in size classes, makes
+each usable with its own guard the first time it is handed out, and hands
+them out and takes them back from any thread without allocating. ThreadSanitizer
 is told about every context and every switch, and Valgrind about every stack.
 
 A coroutine's panic cannot unwind it, as Zig unwinds nothing: the handler
@@ -200,9 +201,9 @@ its `try` unwinds it through its defers.
 |---|---|
 | `Stack.init(.{ .size, .guard, .commit })`, `stack.deinit()` | A stack of its own: usable bytes, a guard below them, and on Windows what is committed at first |
 | `stack.carve(len, alignment)`, `stack.discard(keep_from)` | Takes bytes from the top for what lives as long as the stack; gives pages below a point back to the system |
-| `Pool.init(gpa, .{ .classes, .guard, .commit })`, `pool.deinit(gpa)` | Stacks in size classes, reserved once |
-| `pool.take(size)`, `pool.give(stack)` | The smallest class that fits and has a stack free, or null; a stack back. Any thread |
-| `pool.takeExactly(size)`, `pool.number(stack)`, `pool.stackOf(n)`, `pool.count()`, `pool.inUse()` | Only the smallest class that fits; a stack's stable number among all the pool's, and the stack a number names, so a holder keeps only the number; how many it holds; how many are out |
+| `Pool.init(gpa, .{ .classes, .guard, .commit })`, `pool.deinit(gpa)` | Stacks in size classes, their address space reserved at once; each made usable the first time it is handed out |
+| `pool.take(size)`, `pool.give(stack)` | The smallest class that fits and has a stack free, or null, or `error.SystemResources` when the system refused to make a fresh one usable; a stack back. Any thread |
+| `pool.takeExactly(size)`, `pool.number(stack)`, `pool.stackOf(n)`, `pool.count()`, `pool.inUse()`, `pool.reached()` | Only the smallest class that fits; a stack's stable number among all the pool's, and the stack a number names, so a holder keeps only the number; how many it holds; how many are out; how many were ever handed out |
 | `Context.init(&stack, entry, arg)`, `context.deinit(&stack)` | A context that runs `entry(arg, message)` on `stack` when first switched to; ended, its stack free again |
 | `switchTo(from, to, message)` | Saves the running context into `from`, runs `to`, and returns the message of the switch that resumes `from` |
 | `context.trace(&stack, out)`, `context.traceFrom(&stack, first, out)`, `context.stackPointer()` | A context's return addresses to its first frame, running or suspended, from the caller or from a kept call site; where a suspended one's stack ends |

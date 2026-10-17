@@ -37,7 +37,7 @@ fn poolProgram(_: void, c: *shake.Case) !void {
         const expected: ?usize = for (sizes, 0..) |size, class| {
             if (size >= want and in_use[class] < counts[class]) break class;
         } else null;
-        const got = pool.take(.fromRaw(want));
+        const got = try pool.take(.fromRaw(want));
         if (expected == null) {
             if (got != null) return error.TookFromAFullPool;
             continue;
@@ -103,7 +103,7 @@ fn coroutineProgram(_: void, c: *shake.Case) !void {
         const slot = &slots[i];
         if (slot.* == null) {
             const base = shake.gen.intRange(c.source, u64, 0, 1000);
-            slot.* = .{ .co = try Summer.init(pool.take(.fromRaw(8 * 1024)).?, sum, .{base}), .total = base };
+            slot.* = .{ .co = try Summer.init((try pool.take(.fromRaw(8 * 1024))).?, sum, .{base}), .total = base };
             continue;
         }
         const s = &slot.*.?;

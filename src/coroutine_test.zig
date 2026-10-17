@@ -160,7 +160,7 @@ test "coroutines on a pool's stacks give them back for the next ones" {
     defer pool.deinit(std.testing.allocator);
     var total: u64 = 0;
     for (0..100) |round| {
-        const co = try Summer.init(pool.take(.fromRaw(16 * 1024)).?, sum, .{@as(u64, 1)});
+        const co = try Summer.init((try pool.take(.fromRaw(16 * 1024))).?, sum, .{@as(u64, 1)});
         _ = co.next(@intCast(round));
         const r = co.next(0);
         total += try r.returned;

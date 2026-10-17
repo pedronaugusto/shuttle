@@ -133,7 +133,7 @@ const Bench = struct {
     /// A pool's stack, a context on it, and the stack given back.
     fn createPooled(b: *Bench, units: u64) WorkloadError!void {
         for (0..units) |_| {
-            var s = b.pool.take(.fromRaw(64 * 1024)) orelse return error.PoolEmpty;
+            var s = try b.pool.take(.fromRaw(64 * 1024)) orelse return error.PoolEmpty;
             var c = try shuttle.Context.init(&s, never, b);
             c.deinit(&s);
             b.pool.give(s);
@@ -148,7 +148,7 @@ const Bench = struct {
     /// A coroutine on a pool's stack, run to its return and ended.
     fn coroutinePooled(b: *Bench, units: u64) WorkloadError!void {
         for (0..units) |i| {
-            const co = try Counter.init(b.pool.take(.fromRaw(64 * 1024)) orelse return error.PoolEmpty, once, .{});
+            const co = try Counter.init(try b.pool.take(.fromRaw(64 * 1024)) orelse return error.PoolEmpty, once, .{});
             b.sink +%= co.next(i).returned catch unreachable; // unreachable: the body fails only when canceled
             b.pool.give(co.deinit());
         }

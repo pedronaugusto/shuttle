@@ -2,7 +2,8 @@
 //! faults on any access, and on Windows pages committed as the stack grows.
 //!
 //! What a stack costs is the pages its code touches: the size is address
-//! space. Elsewhere than Windows the system commits a page on first touch.
+//! space, reserved no-access and then made usable. Elsewhere than Windows
+//! the system commits a page on first touch.
 //! On Windows the top pages are committed when the stack is made, with a
 //! guard page below them; touching the guard commits the page below it,
 //! as the system grows a thread's own stack, because a switch keeps the
@@ -71,7 +72,7 @@ pub fn init(options: Options) InitError!Stack {
         .end = base + layout.reserved,
         .limit = base + layout.guard,
     };
-    try s.prepare(layout.commit);
+    try s.prepare(layout.commit, .reserved);
     s.register();
     return s;
 }
@@ -109,13 +110,34 @@ fn roundPages(bytes: usize, page: usize) error{Overflow}!usize {
     return std.mem.alignBackward(usize, up, page);
 }
 
-/// Windows: commits the top `commit` bytes and a guard page below them.
-/// Elsewhere: guards the bytes below `bottom`.
-pub fn prepare(s: *Stack, commit: usize) error{SystemResources}!void {
+/// What faults below a stack's usable bytes.
+pub const Guard = enum {
+    /// The reservation's own no-access pages, left as they are: a mapping
+    /// of their own, between the stack and whatever lies below.
+    reserved,
+    /// Linux 6.13 and later: a guard region in committed memory, so that
+    /// stacks laid side by side make one mapping (`vm.max_map_count`).
+    region,
+};
+
+/// Makes a stack in reserved address space usable, with its guard below
+/// it. When it fails nothing may run on the stack, and trying again is
+/// harmless. Windows: commits the top `commit` bytes and a guard page below
+/// them, the guard below the stack staying reserved. Elsewhere: makes the
+/// usable bytes readable and writable, committed as they are touched.
+pub fn prepare(s: *Stack, commit: usize, guard: Guard) error{SystemResources}!void {
     if (!is_windows) {
-        _ = try memory.guard(memory.pages(s.base, s.bottom));
+        switch (guard) {
+            .reserved => try memory.commit(memory.pages(s.bottom, s.end), false),
+            .region => {
+                try memory.commit(memory.pages(s.base, s.end), false);
+                try memory.installGuard(memory.pages(s.base, s.bottom));
+            },
+        }
+        s.limit = s.bottom;
         return;
     }
+    std.debug.assert(guard == .reserved);
     const page = memory.pageSize();
     const low = s.end - commit;
     std.debug.assert(low - page >= s.bottom);
