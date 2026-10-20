@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Development: the test of a context resumed on another thread no longer keeps a pointer to a thread's frame after it returns (glint's E001); the pointer was not read after, so nothing failed.
+
 ## [0.3.0] - 2026-10-17
 
 ### Breaking

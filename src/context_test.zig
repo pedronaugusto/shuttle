@@ -200,6 +200,9 @@ test "a context suspended on one thread resumes on another, and back" {
         fn drive() void {
             var own: Context = .{};
             resumer = &own;
+            // `own` ends with this frame: the task has switched back
+            // through it by then, and the next thread names its own.
+            defer resumer = undefined;
             _ = Context.switchTo(&own, &task, null);
         }
     };
