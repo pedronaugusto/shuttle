@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-21
+
 ### Changed
 
 - aegis 0.1.14 (from 0.1.12), which preflight 0.12.1 selects.
