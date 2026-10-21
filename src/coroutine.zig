@@ -44,13 +44,11 @@ pub const Core = struct {
 
     /// Runs the coroutine until it yields, returns or panics.
     fn enter(c: *Core) error{Panicked}!void {
-        const previous = activeSlot().*;
-        activeSlot().* = c;
         c.state = .running;
+        // The switch makes `c` what this thread runs inside (its context
+        // names it), and the one back installs the caller's again, on
+        // whichever thread the caller resumes.
         _ = Context.switchTo(&c.caller, &c.context, null);
-        // Read afresh: a runtime that moves its tasks between threads may have
-        // moved this one while the coroutine ran, and the slot is this thread's.
-        activeSlot().* = previous;
         if (c.state == .panicked) return error.Panicked;
     }
 
@@ -68,27 +66,6 @@ pub const Core = struct {
     }
 };
 
-/// The coroutine running on this thread, if any: `enter` sets it before the
-/// switch and puts it back after, on the thread it returns on. A runtime that
-/// moves a task between threads while a coroutine it runs is inside an `Io`
-/// call returns there on another thread; the coroutine's own code is then on
-/// a thread whose slot does not name it, which `current` and the overflow
-/// handler check against the stack pointer and the fault's address.
-threadlocal var active: ?*Core = null;
-
-/// This thread's slot, its address taken afresh at every call. The compiler
-/// may otherwise reuse a thread-local's address computed before a context
-/// switch after it, the address of the thread a moved task left: on aarch64
-/// the address is a register read it merges freely (reactor's lanes crashed
-/// so in optimized builds). The address passes through an assembly statement,
-/// which the compiler cannot see through.
-noinline fn activeSlot() *?*Core {
-    return asm volatile (""
-        : [address] "=r" (-> *?*Core),
-        : [slot] "0" (&active),
-    );
-}
-
 /// The coroutine this thread runs, when the code asking runs on its stack.
 pub fn current() ?*Core {
     const c = running() orelse return null;
@@ -98,8 +75,12 @@ pub fn current() ?*Core {
 
 /// The coroutine this thread runs, wherever the code asking runs: a signal
 /// handler on its own stack included.
+///
+/// What a thread runs inside moves with the context through every switch
+/// (`Context.inside`): a coroutine whose code a runtime suspended inside an
+/// `Io` call and resumed on another thread is the running coroutine there.
 pub fn running() ?*Core {
-    const c = activeSlot().* orelse return null;
+    const c: *Core = @ptrCast(@alignCast(Context.runningInside() orelse return null)); // safe: only a coroutine's context names anything, and it names its Core
     return if (c.state == .running) c else null;
 }
 
@@ -166,6 +147,8 @@ pub fn Coroutine(comptime Input: type, comptime Yield: type, comptime Return: ty
                 .top = top,
                 .args = held,
             };
+            // The code on the coroutine's context is the coroutine's.
+            self.core.context.inside = &self.core;
             return self;
         }
 

@@ -39,9 +39,9 @@ fn end(c: *Context) void {
     };
 }
 
-test "a context is what a switch saves: its registers, and on Windows its stack bounds, and under ThreadSanitizer its fiber" {
+test "a context is what a switch saves: its registers, what its code runs inside, and on Windows its stack bounds, and under ThreadSanitizer its fiber" {
     const native = @import("arch.zig").native;
-    var size: usize = @sizeOf(native.Registers);
+    var size: usize = @sizeOf(native.Registers) + @sizeOf(?*anyopaque);
     if (builtin.os.tag == .windows) size += @sizeOf(teb.Bounds);
     if (builtin.sanitize_thread) size += @sizeOf(usize);
     try std.testing.expectEqual(std.mem.alignForward(usize, size, @alignOf(Context)), @sizeOf(Context));

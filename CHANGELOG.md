@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A coroutine whose code moved threads (its body suspended in a runtime's `Io` call and resumed on another thread, as reactor moves tasks) is the running coroutine on the thread it runs on: its panic is handed to the code that ran it, where it ended the process with std's handler, and an overflow of its stack is named as the coroutine's. What the running code runs inside now belongs to the context: every switch saves the thread's into the context it leaves and installs the one it resumes (`Context.inside`, read by `Context.runningInside`). A switch round trip costs about 1 ns more through `handoff` (7.2 to 8.4 ns on an M3); `coroutine/next` is 3 ns faster, as `enter` no longer sets and restores the slot itself.
+
 ## [0.3.1] - 2026-10-21
 
 ### Changed

@@ -53,6 +53,7 @@ pub fn main(init: std.process.Init) !void {
     try caught();
     try nestedCaught();
     try safetyCaught();
+    try movedCaught();
     const self = try std.process.executablePathAlloc(init.io, arena);
     for (fatal) |case| try expectDeath(init.io, arena, self, case);
 }
@@ -120,6 +121,57 @@ fn safetyCaught() !void {
         return;
     };
     return error.NoPanic;
+}
+
+// A coroutine whose code moved threads, as a runtime moves a task suspended
+// inside an `Io` call: its body parks its context and returns to the
+// thread's, and another thread resumes it. Its panic is still its own.
+
+/// Where the running thread's own context is: the context parked code goes
+/// back to.
+var home: *shuttle.Context = undefined;
+/// The coroutine's body, parked.
+var parked: shuttle.Context = .{};
+var moved_outcome: enum { none, panicked, returned } = .none;
+
+fn movedBoom(_: *Gen.Yielder) error{Canceled}!void {
+    // Suspended as a task in an `Io` call is: saved, and back to the thread.
+    _ = shuttle.switchTo(&parked, home, null);
+    std.debug.panic("moved", .{});
+}
+
+var task_context: shuttle.Context = undefined;
+var task_end: shuttle.Context = .{};
+
+fn movedTask(arg: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+    const g: *Gen = @ptrCast(@alignCast(arg.?)); // safe: `movedCaught` passes its generator
+    moved_outcome = if (g.co.tryNext({})) |_| .returned else |_| .panicked;
+    _ = shuttle.switchTo(&task_end, home, null);
+    unreachable; // unreachable: nothing switches back to an ended task
+}
+
+fn resumeParked() void {
+    var own: shuttle.Context = .{};
+    home = &own;
+    _ = shuttle.switchTo(&own, &parked, null);
+}
+
+fn movedCaught() !void {
+    var g = try Gen.init(newStack(), movedBoom, .{});
+    defer end(&g);
+    var moved_stack = newStack();
+    defer moved_stack.deinit();
+    task_context = try shuttle.Context.init(&moved_stack, movedTask, &g);
+    var own: shuttle.Context = .{};
+    home = &own;
+    _ = shuttle.switchTo(&own, &task_context, null);
+    // The body is parked: no coroutine runs on this thread.
+    const thread = try std.Thread.spawn(.{}, resumeParked, .{});
+    thread.join();
+    if (moved_outcome != .panicked) return error.NoPanic;
+    const p = g.co.panicked() orelse return error.NoPanic;
+    if (!std.mem.eql(u8, p.message(), "moved")) return error.WrongMessage;
+    task_context.deinit(&moved_stack);
 }
 
 // Fatal cases, each in a child.

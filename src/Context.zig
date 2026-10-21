@@ -32,6 +32,35 @@ registers: native.Registers = undefined,
 bounds: if (is_windows) teb.Bounds else void = if (is_windows) undefined else {},
 /// ThreadSanitizer's record of the context.
 fiber: sanitizer.Fiber = sanitizer.none,
+/// What the context's code runs inside (the coroutine whose code it is),
+/// saved while the context is suspended. A switch saves the thread's into
+/// the context it leaves and installs the one it resumes, so it moves with
+/// the context to whichever thread resumes it. A coroutine's own context
+/// names the coroutine; `.{}` and `init` name nothing.
+inside: ?*anyopaque = null,
+
+/// What the code running on this thread runs inside: the `inside` of its
+/// context, installed by the switch that resumed it.
+threadlocal var running_inside: ?*anyopaque = null;
+
+/// This thread's slot, its address taken afresh at every call. The compiler
+/// may otherwise reuse a thread-local's address computed before a switch
+/// after it, the address of the thread a moved context left: on aarch64 the
+/// address is a register read it merges freely (reactor's lanes crashed so
+/// in optimized builds). The address passes through an assembly statement,
+/// which the compiler cannot see through.
+noinline fn insideSlot() *?*anyopaque {
+    return asm volatile (""
+        : [address] "=r" (-> *?*anyopaque),
+        : [slot] "0" (&running_inside),
+    );
+}
+
+/// What the running code runs inside, as `inside` names it: null outside
+/// any coroutine.
+pub fn runningInside() ?*anyopaque {
+    return insideSlot().*;
+}
 
 /// A context's first function. `arg` is what `init` was given, `message`
 /// what the first switch to it sent. It never returns: when its work is
@@ -87,6 +116,9 @@ pub inline fn switchTo(from: *Context, to: *Context, message: ?*anyopaque) ?*any
         from.bounds = teb.get();
         teb.set(to.bounds);
     }
+    const slot = insideSlot();
+    from.inside = slot.*;
+    slot.* = to.inside;
     const t: native.Transfer = .{ .from = &from.registers, .to = &to.registers, .message = message };
     return native.swap(&t).message;
 }

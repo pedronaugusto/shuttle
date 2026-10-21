@@ -182,8 +182,13 @@ thread after another. What that asks of the code:
   variable's address before a switch and use it after; once a context may
   have moved, that address is the old thread's. Read thread-local state
   through a function the compiler does not inline after a switch that may move
-  the context. shuttle's own thread-local state (the running coroutine) is
-  read only on the resumer's side, before and after the switch on one thread.
+  the context. shuttle's own thread-local state, what the running code runs
+  inside (the running coroutine), belongs to the context, not the thread:
+  every switch saves the thread's into the context it leaves (`inside`) and
+  installs the one it resumes. A coroutine whose body a runtime suspended in
+  an `Io` call and resumed on another thread is the running coroutine there,
+  so its panic is handed back and its overflow named. A coroutine's own
+  context names it; a context from `init` or `.{}` names nothing.
 - **Thread-owned locks and state.** A mutex the OS ties to the thread that
   locked it, `errno`, `GetLastError` and a thread's signal mask belong to the
   thread, not to the context: do not hold such a lock across a switch that may
