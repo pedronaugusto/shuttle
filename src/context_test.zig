@@ -256,3 +256,62 @@ test "Windows: a context's stack bounds are its own while it runs, and it grows 
     try std.testing.expect(stack.limit <= Probe.reached);
     stack.deinit();
 }
+
+test "Windows: a switch from any depth to a stack below its own leaves it under the bounds the system grows it by" {
+    if (!supported or builtin.os.tag != .windows) return error.SkipZigTest;
+    // Every place a switch can stand in a page, on a fresh stack: one of
+    // them has the switch's first touch of a new page land in the guard
+    // page, which the system grows only inside the thread's bounds. Those
+    // describe the stack switched to, if anything does, once the switch
+    // has begun: a stack below the one switched from is the case where no
+    // bounds of either contain the touch.
+    inline for (0..256) |i| try switchAtDepth(i * 16);
+}
+
+/// A switch away from a context `pad` bytes below its first frame, to a
+/// context on a stack below its own, then both ended: the thread is back
+/// under its own bounds.
+fn switchAtDepth(comptime pad: usize) !void {
+    const Probe = struct {
+        var driver: Context = .{};
+        var low: Context = undefined;
+        var high: Context = undefined;
+        fn lower(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+            _ = Context.switchTo(&low, &high, null);
+            _ = Context.switchTo(&low, &driver, null);
+            unreachable; // unreachable: the test ends the context without switching back
+        }
+        fn higher(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+            descend();
+            unreachable; // unreachable: as above
+        }
+        /// Past the pages a stack starts with committed, through its
+        /// guard page as the system grows it.
+        noinline fn descend() void {
+            var pages: [3 * 4096]u8 = undefined;
+            @memset(@as(*volatile [3 * 4096]u8, &pages), 0);
+            below();
+            std.mem.doNotOptimizeAway(&pages);
+        }
+        /// A frame of less than a page, touched as it is laid out, so the
+        /// switch starts at a committed edge `pad` bytes further down.
+        noinline fn below() void {
+            var room: [pad + 16]u8 = undefined;
+            @memset(@as(*volatile [pad + 16]u8, &room), 0);
+            _ = Context.switchTo(&high, &low, null);
+            std.mem.doNotOptimizeAway(&room);
+        }
+    };
+    var one = try Stack.init(small);
+    defer one.deinit();
+    var other = try Stack.init(small);
+    defer other.deinit();
+    const low_stack, const high_stack = if (one.base < other.base) .{ &one, &other } else .{ &other, &one };
+    Probe.low = try Context.init(low_stack, Probe.lower, null);
+    defer Probe.low.deinit(low_stack);
+    Probe.high = try Context.init(high_stack, Probe.higher, null);
+    defer Probe.high.deinit(high_stack);
+    const outer = teb.get();
+    _ = Context.switchTo(&Probe.driver, &Probe.low, null);
+    try std.testing.expectEqual(outer, teb.get());
+}
