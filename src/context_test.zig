@@ -15,10 +15,10 @@ const small: Stack.Options = .{ .size = .fromRaw(64 * 1024) };
 var made: [4]struct { context: ?*const Context = null, stack: Stack = undefined } = @splat(.{});
 
 /// A context at `c` on a small stack of its own, which `end` releases.
-fn make(c: *Context, entry: Context.Entry, arg: ?*anyopaque) !void {
+fn make(c: *Context, comptime Arg: type, comptime Message: type, entry: Context.Entry(Arg, Message), arg: Arg) !void {
     for (&made) |*m| if (m.context == null) {
         m.stack = try Stack.init(small);
-        c.* = try Context.init(&m.stack, entry, arg);
+        c.* = try Context.init(&m.stack, Arg, Message, entry, arg);
         m.context = c;
         return;
     };
@@ -52,28 +52,29 @@ test "a context starts at its entry with its argument and the first message, and
     const Probe = struct {
         var driver: Context = .{};
         var task: Context = undefined;
-        var arg_seen: ?*anyopaque = null;
-        var first: ?*anyopaque = null;
-        fn run(arg: ?*anyopaque, message: ?*anyopaque) callconv(.c) noreturn {
+        var arg_seen: ?*u8 = null;
+        var first: usize = 0;
+        fn run(arg: *u8, message: ?*usize) callconv(.c) noreturn {
             arg_seen = arg;
-            first = message;
-            var n: usize = @intFromPtr(message); // safe: the test sends counts as messages
+            var n = message.?;
+            first = n.*;
             while (true) {
-                n = @intFromPtr(Context.switchTo(&task, &driver, @ptrFromInt(n * 2))); // safe: as above
+                n.* *= 2;
+                n = Context.switchTo(&task, &driver, *usize, n).?;
             }
         }
     };
     var marker: u8 = 0;
-    try make(&Probe.task, Probe.run, &marker);
+    try make(&Probe.task, *u8, *usize, Probe.run, &marker);
     defer end(&Probe.task);
-    var n: usize = 1;
-    for (0..1000) |_| {
-        const back = @intFromPtr(Context.switchTo(&Probe.driver, &Probe.task, @ptrFromInt(n))); // safe: counts as messages
-        try std.testing.expectEqual(n * 2, back);
-        n += 1;
+    for (1..1001) |i| {
+        var n: usize = i;
+        const back = Context.switchTo(&Probe.driver, &Probe.task, *usize, &n).?;
+        try std.testing.expectEqual(&n, back);
+        try std.testing.expectEqual(i * 2, n);
     }
-    try std.testing.expectEqual(@as(?*anyopaque, &marker), Probe.arg_seen);
-    try std.testing.expectEqual(@as(usize, 1), @intFromPtr(Probe.first)); // safe: a count
+    try std.testing.expectEqual(@as(?*u8, &marker), Probe.arg_seen);
+    try std.testing.expectEqual(@as(usize, 1), Probe.first);
 }
 
 test "a context enters its function with the stack a call leaves, so a local aligned to the stack's alignment is aligned" {
@@ -82,17 +83,17 @@ test "a context enters its function with the stack a call leaves, so a local ali
         var driver: Context = .{};
         var task: Context = undefined;
         var address: usize = 1;
-        fn run(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+        fn run(_: ?Context.Nothing, _: ?Context.Nothing) callconv(.c) noreturn {
             var local: u128 align(16) = 0;
             std.mem.doNotOptimizeAway(&local);
             address = @intFromPtr(&local); // safe: an address, kept as a number to test its alignment
-            _ = Context.switchTo(&task, &driver, null);
+            _ = Context.switchTo(&task, &driver, Context.Nothing, null);
             unreachable; // unreachable: the test ends the context without switching back
         }
     };
-    try make(&Probe.task, Probe.run, null);
+    try make(&Probe.task, ?Context.Nothing, Context.Nothing, Probe.run, null);
     defer end(&Probe.task);
-    _ = Context.switchTo(&Probe.driver, &Probe.task, null);
+    _ = Context.switchTo(&Probe.driver, &Probe.task, Context.Nothing, null);
     try std.testing.expectEqual(@as(usize, 0), Probe.address % 16);
 }
 
@@ -102,18 +103,19 @@ test "contexts switch among themselves, not only with the thread's own" {
         var driver: Context = .{};
         var tasks: [3]Context = undefined;
         var visits: [3]usize = @splat(0);
-        fn run(arg: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
-            const i = @intFromPtr(arg); // safe: the index the test passed
+        const indices: [3]usize = .{ 0, 1, 2 };
+        fn run(index: *const usize, _: ?Context.Nothing) callconv(.c) noreturn {
+            const i = index.*;
             while (true) {
                 visits[i] += 1;
                 const next = if (visits[i] == 100 and i == 2) &driver else &tasks[(i + 1) % 3];
-                _ = Context.switchTo(&tasks[i], next, null);
+                _ = Context.switchTo(&tasks[i], next, Context.Nothing, null);
             }
         }
     };
-    for (&Ring.tasks, 0..) |*t, i| try make(t, Ring.run, @ptrFromInt(i)); // safe: an index as the argument
+    for (&Ring.tasks, &Ring.indices) |*t, *i| try make(t, *const usize, Context.Nothing, Ring.run, i);
     defer for (&Ring.tasks) |*t| end(t);
-    _ = Context.switchTo(&Ring.driver, &Ring.tasks[0], null);
+    _ = Context.switchTo(&Ring.driver, &Ring.tasks[0], Context.Nothing, null);
     try std.testing.expectEqualSlices(usize, &.{ 100, 100, 100 }, &Ring.visits);
 }
 
@@ -124,7 +126,7 @@ test "a context's trace ends at its first frame, inside its stack, whether it is
         var task: Context = undefined;
         var running: [64]usize = undefined;
         var running_len: usize = 0;
-        fn run(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+        fn run(_: ?Context.Nothing, _: ?Context.Nothing) callconv(.c) noreturn {
             deeper(3);
             unreachable; // unreachable: the test ends the context without switching back
         }
@@ -135,12 +137,12 @@ test "a context's trace ends at its first frame, inside its stack, whether it is
                 return;
             }
             running_len = task.trace(stackOf(&task), &running).len;
-            _ = Context.switchTo(&task, &driver, null);
+            _ = Context.switchTo(&task, &driver, Context.Nothing, null);
         }
     };
-    try make(&Probe.task, Probe.run, null);
+    try make(&Probe.task, ?Context.Nothing, Context.Nothing, Probe.run, null);
     defer end(&Probe.task);
-    _ = Context.switchTo(&Probe.driver, &Probe.task, null);
+    _ = Context.switchTo(&Probe.driver, &Probe.task, Context.Nothing, null);
     // deeper four times and run, and the walk stopped short of its room.
     // Below run, the trampoline's frame where it calls the entry; on Windows
     // it branches in with no return address, which ends the walk at run.
@@ -165,16 +167,16 @@ test "std's own stack walk on a context's stack ends at the context's first fram
         var task: Context = undefined;
         var len: usize = 0;
         var buffer: [64]usize = undefined;
-        fn run(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+        fn run(_: ?Context.Nothing, _: ?Context.Nothing) callconv(.c) noreturn {
             const trace = std.debug.captureCurrentStackTrace(.{}, &buffer);
             len = trace.return_addresses.len;
-            _ = Context.switchTo(&task, &driver, null);
+            _ = Context.switchTo(&task, &driver, Context.Nothing, null);
             unreachable; // unreachable: the test ends the context without switching back
         }
     };
-    try make(&Probe.task, Probe.run, null);
+    try make(&Probe.task, ?Context.Nothing, Context.Nothing, Probe.run, null);
     defer end(&Probe.task);
-    _ = Context.switchTo(&Probe.driver, &Probe.task, null);
+    _ = Context.switchTo(&Probe.driver, &Probe.task, Context.Nothing, null);
     try std.testing.expect(Probe.len < Probe.buffer.len);
 }
 
@@ -185,13 +187,13 @@ test "a context suspended on one thread resumes on another, and back" {
         /// The context of whichever thread last switched to the task.
         var resumer: *Context = undefined;
         var threads: [2]?std.Thread.Id = .{ null, null };
-        fn run(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+        fn run(_: ?Context.Nothing, _: ?Context.Nothing) callconv(.c) noreturn {
             var round: usize = 0;
             while (true) : (round += 1) {
                 // Read the thread through a call: a value the compiler kept
                 // from before the switch would be the other thread's.
                 threads[round % 2] = currentThread();
-                _ = Context.switchTo(&task, resumer, null);
+                _ = Context.switchTo(&task, resumer, Context.Nothing, null);
             }
         }
         noinline fn currentThread() std.Thread.Id {
@@ -203,10 +205,10 @@ test "a context suspended on one thread resumes on another, and back" {
             // `own` ends with this frame: the task has switched back
             // through it by then, and the next thread names its own.
             defer resumer = undefined;
-            _ = Context.switchTo(&own, &task, null);
+            _ = Context.switchTo(&own, &task, Context.Nothing, null);
         }
     };
-    try make(&Probe.task, Probe.run, null);
+    try make(&Probe.task, ?Context.Nothing, Context.Nothing, Probe.run, null);
     defer end(&Probe.task);
     for (0..4) |_| {
         const t = try std.Thread.spawn(.{}, Probe.drive, .{});
@@ -223,10 +225,10 @@ test "Windows: a context's stack bounds are its own while it runs, and it grows 
         var task: Context = undefined;
         var bounds: teb.Bounds = undefined;
         var reached: usize = 0;
-        fn run(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+        fn run(_: ?Context.Nothing, _: ?Context.Nothing) callconv(.c) noreturn {
             bounds = teb.get();
             reached = deep(200);
-            _ = Context.switchTo(&task, &driver, null);
+            _ = Context.switchTo(&task, &driver, Context.Nothing, null);
             unreachable; // unreachable: the test ends the context without switching back
         }
         /// About a page a frame, touched from the top down as the system
@@ -242,9 +244,9 @@ test "Windows: a context's stack bounds are its own while it runs, and it grows 
     };
     var stack = try Stack.init(.{ .size = .fromRaw(1024 * 1024) });
     const committed = stack.limit;
-    Probe.task = try Context.init(&stack, Probe.run, null);
+    Probe.task = try Context.init(&stack, ?Context.Nothing, Context.Nothing, Probe.run, null);
     const outer = teb.get();
-    _ = Context.switchTo(&Probe.driver, &Probe.task, null);
+    _ = Context.switchTo(&Probe.driver, &Probe.task, Context.Nothing, null);
     // Back on the thread's own stack, with its own bounds.
     try std.testing.expectEqual(outer, teb.get());
     try std.testing.expectEqual(stack.end, Probe.bounds.base);
@@ -276,12 +278,12 @@ fn switchAtDepth(comptime pad: usize) !void {
         var driver: Context = .{};
         var low: Context = undefined;
         var high: Context = undefined;
-        fn lower(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
-            _ = Context.switchTo(&low, &high, null);
-            _ = Context.switchTo(&low, &driver, null);
+        fn lower(_: ?Context.Nothing, _: ?Context.Nothing) callconv(.c) noreturn {
+            _ = Context.switchTo(&low, &high, Context.Nothing, null);
+            _ = Context.switchTo(&low, &driver, Context.Nothing, null);
             unreachable; // unreachable: the test ends the context without switching back
         }
-        fn higher(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+        fn higher(_: ?Context.Nothing, _: ?Context.Nothing) callconv(.c) noreturn {
             descend();
             unreachable; // unreachable: as above
         }
@@ -298,7 +300,7 @@ fn switchAtDepth(comptime pad: usize) !void {
         noinline fn below() void {
             var room: [pad + 16]u8 = undefined;
             @memset(@as(*volatile [pad + 16]u8, &room), 0);
-            _ = Context.switchTo(&high, &low, null);
+            _ = Context.switchTo(&high, &low, Context.Nothing, null);
             std.mem.doNotOptimizeAway(&room);
         }
     };
@@ -307,11 +309,11 @@ fn switchAtDepth(comptime pad: usize) !void {
     var other = try Stack.init(small);
     defer other.deinit();
     const low_stack, const high_stack = if (one.base < other.base) .{ &one, &other } else .{ &other, &one };
-    Probe.low = try Context.init(low_stack, Probe.lower, null);
+    Probe.low = try Context.init(low_stack, ?Context.Nothing, Context.Nothing, Probe.lower, null);
     defer Probe.low.deinit(low_stack);
-    Probe.high = try Context.init(high_stack, Probe.higher, null);
+    Probe.high = try Context.init(high_stack, ?Context.Nothing, Context.Nothing, Probe.higher, null);
     defer Probe.high.deinit(high_stack);
     const outer = teb.get();
-    _ = Context.switchTo(&Probe.driver, &Probe.low, null);
+    _ = Context.switchTo(&Probe.driver, &Probe.low, Context.Nothing, null);
     try std.testing.expectEqual(outer, teb.get());
 }

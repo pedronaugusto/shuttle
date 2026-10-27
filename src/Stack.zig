@@ -97,11 +97,11 @@ pub const Layout = struct {
         const page = memory.pageSize();
         // Windows keeps a guard page inside the usable bytes, below what is committed.
         const least = if (is_windows) 2 * page else page;
-        const usable = try roundPages(@max(options.size.raw(), least), page);
+        const usable_bytes = try roundPages(@max(options.size.raw(), least), page);
         const guard_bytes = try roundPages(@max(if (options.guard) |g| g.raw() else page, page), page);
-        const commit = @min(usable - page, try roundPages(if (options.commit) |c| c.raw() else 2 * page, page));
-        const reserved = (Bytes.fromRaw(usable).add(.fromRaw(guard_bytes)) catch return error.Overflow).raw();
-        return .{ .guard = guard_bytes, .usable = usable, .commit = @max(commit, page), .reserved = reserved };
+        const commit = @min(usable_bytes - page, try roundPages(if (options.commit) |c| c.raw() else 2 * page, page));
+        const reserved = (Bytes.fromRaw(usable_bytes).add(.fromRaw(guard_bytes)) catch return error.Overflow).raw();
+        return .{ .guard = guard_bytes, .usable = usable_bytes, .commit = @max(commit, page), .reserved = reserved };
     }
 };
 
@@ -190,6 +190,16 @@ pub fn size(s: *const Stack) Bytes {
     return .fromRaw(s.end - s.bottom);
 }
 
+/// The usable bytes themselves, `bottom` to `end`, for code that reads or
+/// fills a stack nothing runs on (a scheduler measuring how deep its tasks
+/// went). On Windows only the bytes from `limit` up are committed: `reach`
+/// the lowest byte touched first.
+pub fn usable(s: *const Stack) []u8 {
+    // aegis: internal: the stack's usable bytes, which its reservation holds from `bottom` to `end`
+    const low: [*]u8 = @ptrFromInt(s.bottom);
+    return low[0 .. s.end - s.bottom];
+}
+
 /// Whether `address` lies in the stack's usable bytes.
 pub fn contains(s: *const Stack, address: usize) bool {
     return address >= s.bottom and address < s.end;
@@ -214,9 +224,7 @@ pub fn discard(s: *const Stack, keep_from: usize) void {
 /// Tells Valgrind the stack is one, so that a switch onto it is not taken
 /// for an enormous frame.
 pub fn register(s: *Stack) void {
-    // aegis: internal: the stack's own bytes, named to Valgrind
-    const usable: [*]u8 = @ptrFromInt(s.bottom);
-    s.valgrind = std.valgrind.stackRegister(usable[0 .. s.end - s.bottom]);
+    s.valgrind = std.valgrind.stackRegister(s.usable());
 }
 
 pub fn unregister(s: *Stack) void {

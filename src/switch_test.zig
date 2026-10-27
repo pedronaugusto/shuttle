@@ -35,7 +35,7 @@ const Scrambler = struct {
     fn start() !void {
         own = scrambledControl();
         stack = try Stack.init(.{ .size = .fromRaw(64 * 1024) });
-        task = try Context.init(&stack, run, null);
+        task = try Context.init(&stack, ?Context.Nothing, Context.Nothing, run, null);
     }
 
     fn finish() void {
@@ -43,17 +43,17 @@ const Scrambler = struct {
         stack.deinit();
     }
 
-    fn run(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+    fn run(_: ?Context.Nothing, _: ?Context.Nothing) callconv(.c) noreturn {
         while (true) {
             sink = scramble(&own);
-            _ = Context.switchTo(&task, &driver, null);
+            _ = Context.switchTo(&task, &driver, Context.Nothing, null);
             found = native.control();
         }
     }
 
     /// What a probe calls: one switch to the context and back.
     fn bounce() callconv(.c) void {
-        _ = Context.switchTo(&driver, &task, null);
+        _ = Context.switchTo(&driver, &task, Context.Nothing, null);
     }
 };
 
@@ -686,7 +686,7 @@ test "values the switching code keeps in vector registers survive a context that
     // other call for the compiler to spill around.
     var kept: [12]V = undefined;
     inline for (0..12) |i| kept[i] = input[i] * input[i];
-    _ = Context.switchTo(&Scrambler.driver, &Scrambler.task, null);
+    _ = Context.switchTo(&Scrambler.driver, &Scrambler.task, Context.Nothing, null);
     inline for (0..12) |i| {
         const square: f32 = @floatFromInt((i + 1) * (i + 1));
         try std.testing.expectEqual(@as(V, @splat(square)), kept[i]);
@@ -702,6 +702,6 @@ test "values the switching code keeps in general registers survive a context tha
     std.mem.doNotOptimizeAway(&input);
     var kept: [12]u64 = undefined;
     inline for (0..12) |i| kept[i] = input[i] *% 0x9e37_79b9_7f4a_7c15;
-    _ = Context.switchTo(&Scrambler.driver, &Scrambler.task, null);
+    _ = Context.switchTo(&Scrambler.driver, &Scrambler.task, Context.Nothing, null);
     inline for (0..12) |i| try std.testing.expectEqual(@as(u64, i + 1) *% 0x9e37_79b9_7f4a_7c15, kept[i]);
 }

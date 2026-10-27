@@ -136,24 +136,23 @@ var moved_outcome: enum { none, panicked, returned } = .none;
 
 fn movedBoom(_: *Gen.Yielder) error{Canceled}!void {
     // Suspended as a task in an `Io` call is: saved, and back to the thread.
-    _ = shuttle.switchTo(&parked, home, null);
+    _ = shuttle.switchTo(&parked, home, shuttle.Context.Nothing, null);
     std.debug.panic("moved", .{});
 }
 
 var task_context: shuttle.Context = undefined;
 var task_end: shuttle.Context = .{};
 
-fn movedTask(arg: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
-    const g: *Gen = @ptrCast(@alignCast(arg.?)); // safe: `movedCaught` passes its generator
+fn movedTask(g: *Gen, _: ?shuttle.Context.Nothing) callconv(.c) noreturn {
     moved_outcome = if (g.co.tryNext({})) |_| .returned else |_| .panicked;
-    _ = shuttle.switchTo(&task_end, home, null);
+    _ = shuttle.switchTo(&task_end, home, shuttle.Context.Nothing, null);
     unreachable; // unreachable: nothing switches back to an ended task
 }
 
 fn resumeParked() void {
     var own: shuttle.Context = .{};
     home = &own;
-    _ = shuttle.switchTo(&own, &parked, null);
+    _ = shuttle.switchTo(&own, &parked, shuttle.Context.Nothing, null);
 }
 
 fn movedCaught() !void {
@@ -161,10 +160,10 @@ fn movedCaught() !void {
     defer end(&g);
     var moved_stack = newStack();
     defer moved_stack.deinit();
-    task_context = try shuttle.Context.init(&moved_stack, movedTask, &g);
+    task_context = try shuttle.Context.init(&moved_stack, *Gen, shuttle.Context.Nothing, movedTask, &g);
     var own: shuttle.Context = .{};
     home = &own;
-    _ = shuttle.switchTo(&own, &task_context, null);
+    _ = shuttle.switchTo(&own, &task_context, shuttle.Context.Nothing, null);
     // The body is parked: no coroutine runs on this thread.
     const thread = try std.Thread.spawn(.{}, resumeParked, .{});
     thread.join();
@@ -222,16 +221,16 @@ var driver: shuttle.Context = .{};
 var task: shuttle.Context = undefined;
 var task_stack: shuttle.Stack = undefined;
 
-fn overflowEntry(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+fn overflowEntry(_: ?shuttle.Context.Nothing, _: ?shuttle.Context.Nothing) callconv(.c) noreturn {
     std.mem.doNotOptimizeAway(recurse(1 << 20));
-    _ = shuttle.switchTo(&task, &driver, null);
+    _ = shuttle.switchTo(&task, &driver, shuttle.Context.Nothing, null);
     unreachable; // unreachable: never switched back to
 }
 
 fn overflowContext() void {
     task_stack = newStack();
-    task = shuttle.Context.init(&task_stack, overflowEntry, null) catch @panic("no stack");
-    _ = shuttle.switchTo(&driver, &task, null);
+    task = shuttle.Context.init(&task_stack, ?shuttle.Context.Nothing, shuttle.Context.Nothing, overflowEntry, null) catch @panic("no stack");
+    _ = shuttle.switchTo(&driver, &task, shuttle.Context.Nothing, null);
 }
 
 // The children.

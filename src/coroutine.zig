@@ -62,7 +62,7 @@ pub const Core = struct {
         // The switch makes `c` what this thread runs inside (its context
         // names it), and the one back installs the caller's again, on
         // whichever thread the caller resumes.
-        _ = Context.switchTo(&c.caller, &c.context, null);
+        _ = Context.switchTo(&c.caller, &c.context, Context.Nothing, null);
         if (c.state() == .panicked) return error.Panicked;
     }
 
@@ -74,7 +74,7 @@ pub const Core = struct {
     /// Back to whoever runs the coroutine, by `step`.
     fn leave(c: *Core, step: Step) void {
         _ = c.life.step(step) catch unreachable; // unreachable: only the running coroutine leaves, and every way out of running is an edge
-        _ = Context.switchTo(&c.context, &c.caller, null);
+        _ = Context.switchTo(&c.context, &c.caller, Context.Nothing, null);
     }
 
     /// The panic handler's way out of a panicking coroutine, which never
@@ -156,9 +156,7 @@ pub fn Coroutine(comptime Input: type, comptime Yield: type, comptime Return: ty
             frame.args = args;
             const self = &frame.co;
             const entry = struct {
-                fn start(arg: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
-                    // aegis: boundary: the switch's first argument register holds what `Context.init` laid there: the frame `init` carved
-                    const f: *Frame = @ptrCast(@alignCast(arg.?));
+                fn start(f: *Frame, _: ?Context.Nothing) callconv(.c) noreturn {
                     const co = &f.co;
                     // Read before the result is written over it.
                     const input = co.value.input;
@@ -169,7 +167,7 @@ pub fn Coroutine(comptime Input: type, comptime Yield: type, comptime Return: ty
                 }
             }.start;
             self.* = .{
-                .core = .{ .context = try Context.init(&s, entry, frame), .stack = s },
+                .core = .{ .context = try Context.init(&s, *Frame, Context.Nothing, entry, frame), .stack = s },
                 .value = undefined,
                 .top = top,
                 .yielder = .{ .coroutine = self },

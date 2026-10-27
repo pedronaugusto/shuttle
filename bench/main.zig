@@ -24,17 +24,18 @@ const Bench = struct {
     counter: *Counter = undefined,
     numbers: Numbers = undefined,
     sink: u64 = 0,
+    /// What the handoff body asks the driver to do after each switch back.
+    noting: shuttle.handoff.After = .{ .run = noteFrom },
 
     // The switch, both ways.
 
-    fn bounce(arg: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
-        const b: *Bench = @ptrCast(@alignCast(arg.?)); // safe: setup passes the bench
-        while (true) _ = shuttle.switchTo(&b.task, &b.driver, null);
+    fn bounce(b: *Bench, _: ?shuttle.Context.Nothing) callconv(.c) noreturn {
+        while (true) _ = shuttle.switchTo(&b.task, &b.driver, shuttle.Context.Nothing, null);
     }
 
     fn switchSetup(b: *Bench) WorkloadError!void {
         b.stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
-        b.task = try shuttle.Context.init(&b.stack, bounce, b);
+        b.task = try shuttle.Context.init(&b.stack, *Bench, shuttle.Context.Nothing, bounce, b);
     }
 
     fn switchTeardown(b: *Bench) WorkloadError!void {
@@ -43,24 +44,23 @@ const Bench = struct {
     }
 
     fn switchRoundTrip(b: *Bench, units: u64) WorkloadError!void {
-        for (0..units) |_| _ = shuttle.switchTo(&b.driver, &b.task, null);
+        for (0..units) |_| _ = shuttle.switchTo(&b.driver, &b.task, shuttle.Context.Nothing, null);
     }
 
     // The handoff, both ways.
 
-    fn handoffBody(arg: ?*anyopaque) noreturn {
-        const b: *Bench = @ptrCast(@alignCast(arg.?)); // safe: setup passes the bench
-        while (true) shuttle.handoff.switchTo(&b.task, &b.driver, .{ .run = noteFrom, .data = b });
+    fn handoffBody(b: *Bench) noreturn {
+        while (true) shuttle.handoff.switchTo(&b.task, &b.driver, &b.noting);
     }
 
-    fn noteFrom(data: ?*anyopaque, _: *shuttle.Context) void {
-        const b: *Bench = @ptrCast(@alignCast(data.?)); // safe: the body passes the bench
+    fn noteFrom(after: *shuttle.handoff.After, _: *shuttle.Context) void {
+        const b: *Bench = @alignCast(@fieldParentPtr("noting", after)); // safe: the field belongs to this record
         b.sink +%= 1;
     }
 
     fn handoffSetup(b: *Bench) WorkloadError!void {
         b.stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
-        b.task = try shuttle.Context.init(&b.stack, shuttle.handoff.entry(handoffBody), b);
+        b.task = try shuttle.handoff.init(&b.stack, *Bench, handoffBody, b);
     }
 
     fn handoffRoundTrip(b: *Bench, units: u64) WorkloadError!void {
@@ -115,7 +115,7 @@ const Bench = struct {
         b.pool.deinit(b.gpa);
     }
 
-    fn never(_: ?*anyopaque, _: ?*anyopaque) callconv(.c) noreturn {
+    fn never(_: *Bench, _: ?shuttle.Context.Nothing) callconv(.c) noreturn {
         unreachable; // unreachable: the contexts made here are never run
     }
 
@@ -124,7 +124,7 @@ const Bench = struct {
     fn createOwn(b: *Bench, units: u64) WorkloadError!void {
         for (0..units) |_| {
             var s = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
-            var c = try shuttle.Context.init(&s, never, b);
+            var c = try shuttle.Context.init(&s, *Bench, shuttle.Context.Nothing, never, b);
             c.deinit(&s);
             s.deinit();
         }
@@ -134,7 +134,7 @@ const Bench = struct {
     fn createPooled(b: *Bench, units: u64) WorkloadError!void {
         for (0..units) |_| {
             var s = try b.pool.take(.fromRaw(64 * 1024)) orelse return error.PoolEmpty;
-            var c = try shuttle.Context.init(&s, never, b);
+            var c = try shuttle.Context.init(&s, *Bench, shuttle.Context.Nothing, never, b);
             c.deinit(&s);
             b.pool.give(s);
         }

@@ -18,6 +18,10 @@ const Jobs = struct {
 
     const Job = struct {
         context: Context,
+        /// What the worker it leaves does with it: park it on the next worker,
+        /// or count it done.
+        parking: handoff.After = .{ .run = park },
+        ending: handoff.After = .{ .run = finished },
         steps: usize = 0,
         /// The worker that resumed the job last, written by it before the switch.
         worker: *Worker = undefined,
@@ -74,8 +78,7 @@ const Jobs = struct {
     var jobs: [count]Job = undefined;
     var stacks: [count]Stack = undefined;
 
-    fn body(arg: ?*anyopaque) noreturn {
-        const job: *Job = @ptrCast(@alignCast(arg.?)); // safe: the test passes its job
+    fn body(job: *Job) noreturn {
         while (true) {
             job.steps += 1;
             const thread = currentThread();
@@ -84,10 +87,10 @@ const Jobs = struct {
             }
             job.last_thread = thread;
             if (job.steps == steps) {
-                handoff.switchTo(&job.context, &job.worker.context, .{ .run = finished });
+                handoff.switchTo(&job.context, &job.worker.context, &job.ending);
                 unreachable; // unreachable: a finished job is never resumed
             }
-            handoff.switchTo(&job.context, &job.worker.context, .{ .run = park, .data = job.worker });
+            handoff.switchTo(&job.context, &job.worker.context, &job.parking);
         }
     }
 
@@ -96,12 +99,12 @@ const Jobs = struct {
     }
 
     /// On the worker the job left: the job goes to the next worker.
-    fn park(data: ?*anyopaque, from: *Context) void {
-        const w: *Worker = @ptrCast(@alignCast(data.?)); // safe: the job passes its worker
-        all[(w.index + 1) % workers].push(@fieldParentPtr("context", from));
+    fn park(after: *handoff.After, _: *Context) void {
+        const job: *Job = @alignCast(@fieldParentPtr("parking", after)); // safe: the field belongs to this record
+        all[(job.worker.index + 1) % workers].push(job);
     }
 
-    fn finished(_: ?*anyopaque, _: *Context) void {
+    fn finished(_: *handoff.After, _: *Context) void {
         _ = done.fetchAdd(1, .release);
     }
 };
@@ -114,7 +117,7 @@ test "worker threads run contexts that park themselves on another worker's queue
     defer pool.deinit(std.testing.allocator);
     for (&Jobs.jobs, 0..) |*job, i| {
         Jobs.stacks[i] = (try pool.take(.fromRaw(64 * 1024))).?;
-        job.* = .{ .context = try Context.init(&Jobs.stacks[i], handoff.entry(Jobs.body), job) };
+        job.* = .{ .context = try handoff.init(&Jobs.stacks[i], *Jobs.Job, Jobs.body, job) };
         Jobs.all[i % Jobs.workers].push(job);
     }
     defer for (&Jobs.jobs, &Jobs.stacks) |*job, *stack| {
@@ -268,8 +271,8 @@ test "a stack the system refuses to make usable is an error at its take, and is 
     const made = (try pool.take(.fromRaw(16 * 1024))).?;
     try std.testing.expectEqual(next.bottom, made.bottom);
     try std.testing.expect(made.guards(made.bottom - 1));
-    const bytes: [*]volatile u8 = @ptrFromInt(made.end - 1); // safe: the stack's own top byte, committed
-    bytes[0] = 7;
+    const usable = made.usable();
+    @as(*volatile u8, &usable[usable.len - 1]).* = 7;
     try std.testing.expect(try pool.take(.fromRaw(16 * 1024)) == null);
     pool.give(made);
     pool.give(held);
@@ -292,4 +295,21 @@ test "a stack gives bytes of a size and an alignment known only at run time from
     const typed = try stack.carve(extern struct { a: u64, b: u32 });
     try std.testing.expect(@intFromPtr(typed) + @sizeOf(@TypeOf(typed.*)) <= above);
     try std.testing.expectError(error.StackTooSmall, stack.carveBytes(64 * 1024, .@"16"));
+}
+
+test "a stack's usable bytes run from its bottom to its end, what was carved included, and are its own" {
+    var stack = try Stack.init(.{ .size = .fromRaw(64 * 1024) });
+    defer stack.deinit();
+    const carved = try stack.carve(u64);
+    const usable = stack.usable();
+    try std.testing.expectEqual(stack.size().raw(), usable.len);
+    try std.testing.expectEqual(stack.bottom, @intFromPtr(usable.ptr));
+    // The carved value is in them, at its offset from the bottom.
+    carved.* = 0x1122_3344_5566_7788;
+    const at = @intFromPtr(carved) - stack.bottom;
+    try std.testing.expectEqualSlices(u8, std.mem.asBytes(carved), usable[at..][0..8]);
+    // Filling the committed top fills the stack's own memory.
+    try stack.reach(stack.top - 4096);
+    @memset(usable[stack.top - 4096 - stack.bottom .. stack.top - stack.bottom], 0x5a);
+    try std.testing.expect(std.mem.allEqual(u8, usable[stack.top - 4096 - stack.bottom .. stack.top - stack.bottom], 0x5a));
 }

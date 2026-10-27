@@ -90,18 +90,22 @@ const shuttle = @import("shuttle");
 var main_context: shuttle.Context = .{}; // a thread's own context needs no stack
 var ping: shuttle.Context = undefined;
 
-fn pinger(_: ?*anyopaque, message: ?*anyopaque) callconv(.c) noreturn {
-    var n = @intFromPtr(message); // safe: the example sends counts
-    while (true) n = @intFromPtr(shuttle.switchTo(&ping, &main_context, @ptrFromInt(n + 1))); // safe: as above
+fn pinger(_: ?shuttle.Context.Nothing, message: ?*u64) callconv(.c) noreturn {
+    var n = message.?;
+    while (true) {
+        n.* += 1;
+        n = shuttle.switchTo(&ping, &main_context, *u64, n).?;
+    }
 }
 
 fn context() !void {
     var stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
     defer stack.deinit();
-    ping = try shuttle.Context.init(&stack, pinger, null); // the stack stays yours
+    ping = try shuttle.Context.init(&stack, ?shuttle.Context.Nothing, *u64, pinger, null); // the stack stays yours
     defer ping.deinit(&stack);
-    const back = shuttle.switchTo(&main_context, &ping, @ptrFromInt(41)); // safe: a count
-    std.debug.assert(@intFromPtr(back) == 42); // safe: a count
+    var n: u64 = 41;
+    _ = shuttle.switchTo(&main_context, &ping, *u64, &n);
+    std.debug.assert(n == 42);
 }
 ```
 <!-- END GENERATED -->
@@ -121,19 +125,20 @@ const Job = struct {
     /// Whoever switched to the job, to switch back to.
     worker: *shuttle.Context = undefined,
     done: bool = false,
+    /// What the worker does once the job is off its stack.
+    ending: shuttle.handoff.After = .{ .run = finished },
 };
 
-fn work(arg: ?*anyopaque) noreturn {
-    const job: *Job = @ptrCast(@alignCast(arg.?)); // safe: the job passes itself
+fn work(job: *Job) noreturn {
     // ... the job's work, parking with handoff.switchTo as it waits ...
-    shuttle.handoff.switchTo(&job.context, job.worker, .{ .run = finished });
+    shuttle.handoff.switchTo(&job.context, job.worker, &job.ending);
     unreachable; // unreachable: a finished job is never switched to again
 }
 
 /// Runs on the worker once the job's registers are saved: from here on
 /// another thread could take the job, or its stack could be given back.
-fn finished(_: ?*anyopaque, from: *shuttle.Context) void {
-    const job: *Job = @fieldParentPtr("context", from);
+fn finished(after: *shuttle.handoff.After, _: *shuttle.Context) void {
+    const job: *Job = @fieldParentPtr("ending", after);
     job.done = true;
 }
 
@@ -146,7 +151,7 @@ fn jobs() !void {
     defer pool.deinit(gpa);
     var worker: shuttle.Context = .{};
     var job: Job = .{ .context = undefined, .stack = (try pool.take(.fromRaw(16 * 1024))).?, .worker = &worker };
-    job.context = try .init(&job.stack, shuttle.handoff.entry(work), &job);
+    job.context = try shuttle.handoff.init(&job.stack, *Job, work, &job);
     shuttle.handoff.switchTo(&worker, &job.context, null);
     std.debug.assert(job.done);
     job.context.deinit(&job.stack);
@@ -200,14 +205,14 @@ its `try` unwinds it through its defers.
 | Call | Does |
 |---|---|
 | `Stack.init(.{ .size, .guard, .commit })`, `stack.deinit()` | A stack of its own: usable bytes, a guard below them, and on Windows what is committed at first |
-| `stack.carve(len, alignment)`, `stack.discard(keep_from)` | Takes bytes from the top for what lives as long as the stack; gives pages below a point back to the system |
+| `stack.carve(T)`, `stack.carveBytes(len, alignment)`, `stack.discard(keep_from)`, `stack.usable()` | Takes a `T`, or bytes of a size known only at run time, from the top for what lives as long as the stack; gives pages below a point back to the system; the usable bytes, for code that reads or fills a stack nothing runs on |
 | `Pool.init(gpa, .{ .classes, .guard, .commit })`, `pool.deinit(gpa)` | Stacks in size classes, their address space reserved at once; each made usable the first time it is handed out |
 | `pool.take(size)`, `pool.give(stack)` | The smallest class that fits and has a stack free, or null, or `error.SystemResources` when the system refused to make a fresh one usable; a stack back. Any thread |
 | `pool.takeExactly(size)`, `pool.number(stack)`, `pool.stackOf(n)`, `pool.count()`, `pool.inUse()`, `pool.reached()` | Only the smallest class that fits; a stack's stable number among all the pool's, and the stack a number names, so a holder keeps only the number; how many it holds; how many are out; how many were ever handed out |
-| `Context.init(&stack, entry, arg)`, `context.deinit(&stack)` | A context that runs `entry(arg, message)` on `stack` when first switched to; ended, its stack free again |
-| `switchTo(from, to, message)` | Saves the running context into `from`, runs `to`, and returns the message of the switch that resumes `from` |
+| `Context.init(&stack, Arg, Message, entry, arg)`, `context.deinit(&stack)` | A context that runs `entry(arg, message)` on `stack` when first switched to, its switches carrying `Message`s (`Context.Nothing` when they carry none); ended, its stack free again |
+| `switchTo(from, to, Message, message)` | Saves the running context into `from`, runs `to`, and returns the message of the switch that resumes `from` |
 | `context.trace(&stack, out)`, `context.traceFrom(&stack, first, out)`, `context.stackPointer()` | A context's return addresses to its first frame, running or suspended, from the caller or from a kept call site; where a suspended one's stack ends |
-| `handoff.switchTo(from, to, after)`, `handoff.entry(body)` | A switch whose `after` runs on the side switched to once `from` is saved; the entry of a context switched to that way |
+| `handoff.switchTo(from, to, after)`, `handoff.init(&stack, Arg, body, arg)` | A switch whose `after` (kept in the record of the work, found from it by `@fieldParentPtr`) runs on the side switched to once `from` is saved; a context switched to that way, running `body(arg)` |
 | `Coroutine(Input, Yield, Return)` | `init(stack, body, args)`, `next(input)`, `tryNext(input)`, `state()`, `done()`, `panicked()`, `deinit()` |
 | `Coroutine(...).Yielder.yield(value)` | Hands `value` to the code running the coroutine and returns its next input, or `error.Canceled` |
 | `Generator(Yield, Error)` | `init(stack, body, args)`, `next()` (each value, then null or the body's error), `deinit()` |
