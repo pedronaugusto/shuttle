@@ -42,7 +42,8 @@ pub inline fn switchTo(from: *Context, to: *Context, after: ?After) void {
 /// copied first: once `after` publishes the context that sent it, that
 /// context's stack, where the note lives, may run again.
 fn finish(message: ?*anyopaque) void {
-    const note: Note = @as(*const Note, @ptrCast(@alignCast(message.?))).*; // safe: every switch of this module sends a Note
+    // aegis: boundary: every switch of this module sends a Note
+    const note: Note = @as(*const Note, @ptrCast(@alignCast(message.?))).*;
     if (note.after) |a| a.run(a.data, note.from);
 }
 

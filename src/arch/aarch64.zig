@@ -48,6 +48,7 @@ comptime {
 }
 
 pub fn control() Control {
+    // aegis: boundary: reads the floating-point control register, which a context saves and restores
     return .{ .fpcr = asm volatile ("mrs %[r], fpcr"
         : [r] "=r" (-> u64),
     ) };
@@ -57,6 +58,7 @@ pub fn control() Control {
 /// Returns the transfer that resumed this context later; it travels in x1,
 /// where a new context's entry takes its second argument.
 pub inline fn swap(t: *const Transfer) *const Transfer {
+    // aegis: boundary: the switch itself: saves the running context's registers into `t.from` and loads `t.to`'s, as AAPCS64 has them
     return asm volatile (
         \\ ldp x0, x2, [x1]
         \\ mov x3, sp
@@ -211,17 +213,20 @@ pub const first_frame = 16;
 /// ends a walk there.
 pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
     const sp = top - first_frame;
-    const slots: [*]usize = @ptrFromInt(sp); // safe: inside the stack, below its top
+    // aegis: internal: inside the stack, below its top
+    const slots: [*]usize = @ptrFromInt(sp);
     slots[0] = arg;
     slots[1] = entry;
     return .{ .sp = sp, .fp = 0, .pc = pc, .lr = 0, .control = control() };
 }
 
 pub fn trampoline() callconv(.naked) noreturn {
+    // aegis: boundary: the first frame's entry: moves the entry and argument `initial` laid in into AAPCS64's argument registers
     if (is_windows) asm volatile (
         \\ ldp x0, x9, [sp]
         \\ ldr x1, [x1, #16]
         \\ br x9
+        // aegis: boundary: as above, outside Windows
     ) else asm volatile (
         \\ .cfi_undefined lr
         \\ ldp x0, x9, [sp]

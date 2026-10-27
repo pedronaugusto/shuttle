@@ -36,6 +36,7 @@ comptime {
 
 pub fn control() Control {
     if (!has_float) return .{ .fcsr = 0 };
+    // aegis: boundary: reads the floating-point control and status register, which a context saves and restores
     return .{ .fcsr = asm volatile ("frcsr %[r]"
         : [r] "=r" (-> u64),
     ) };
@@ -56,6 +57,7 @@ else
 /// Returns the transfer that resumed this context later; it travels in a1,
 /// where a new context's entry takes its second argument.
 pub inline fn swap(t: *const Transfer) *const Transfer {
+    // aegis: boundary: the switch itself: saves the running context's registers into `t.from` and loads `t.to`'s, as the RISC-V calling convention has them
     return asm volatile (
         \\ ld a0, 0(a1)
         \\ ld a2, 8(a1)
@@ -190,13 +192,15 @@ pub const first_frame = 16;
 /// it.
 pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
     const sp = top - first_frame;
-    const slots: [*]usize = @ptrFromInt(sp); // safe: inside the stack, below its top
+    // aegis: internal: inside the stack, below its top
+    const slots: [*]usize = @ptrFromInt(sp);
     slots[0] = arg;
     slots[1] = entry;
     return .{ .sp = sp, .fp = 0, .pc = pc, .ra = 0, .control = control() };
 }
 
 pub fn trampoline() callconv(.naked) noreturn {
+    // aegis: boundary: the first frame's entry: moves the entry and argument `initial` laid in into the calling convention's argument registers
     asm volatile (
         \\ .cfi_undefined ra
         \\ ld a0, 0(sp)

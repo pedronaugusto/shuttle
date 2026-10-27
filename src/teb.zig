@@ -19,7 +19,8 @@ pub const Bounds = extern struct {
 const deallocation_offset = 0x1478;
 
 fn deallocationField() *usize {
-    return @ptrFromInt(@intFromPtr(windows.teb()) + deallocation_offset); // safe: a field of the running thread's information block
+    // aegis: boundary: a field of the running thread's information block
+    return @ptrFromInt(@intFromPtr(windows.teb()) + deallocation_offset);
 }
 
 pub fn get() Bounds {
@@ -33,7 +34,9 @@ pub fn get() Bounds {
 
 pub fn set(b: Bounds) void {
     const teb = windows.teb();
-    teb.NtTib.StackBase = @ptrFromInt(b.base); // safe: the bounds of a stack this thread runs on next
-    teb.NtTib.StackLimit = @ptrFromInt(b.limit); // safe: as above
+    // aegis: boundary: the bounds of a stack this thread runs on next
+    teb.NtTib.StackBase = @ptrFromInt(b.base);
+    // aegis: boundary: the bounds of a stack this thread runs on next
+    teb.NtTib.StackLimit = @ptrFromInt(b.limit);
     deallocationField().* = b.deallocation;
 }

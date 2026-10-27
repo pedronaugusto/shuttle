@@ -50,7 +50,8 @@ pub fn walk(start: usize, low: usize, high: usize, out: []usize) []usize {
 
 fn load(fp: usize, comptime offset: comptime_int) usize {
     const at = fp +% @as(usize, @bitCast(@as(isize, offset)));
-    return @as(*const usize, @ptrFromInt(at)).*; // safe: `walk` checked the record lies inside the stack
+    // aegis: boundary: `walk` checked the record lies inside the stack
+    return @as(*const usize, @ptrFromInt(at)).*;
 }
 
 /// The running code's frame pointer.
@@ -63,12 +64,15 @@ pub inline fn framePointer() usize {
 /// anything.
 pub inline fn stackPointer() usize {
     return switch (builtin.cpu.arch) {
+        // aegis: boundary: reads the stack pointer register
         .x86_64 => asm volatile ("movq %%rsp, %[sp]"
             : [sp] "=r" (-> usize),
         ),
+        // aegis: boundary: reads the stack pointer register
         .aarch64 => asm volatile ("mov %[sp], sp"
             : [sp] "=r" (-> usize),
         ),
+        // aegis: boundary: reads the stack pointer register
         .riscv64 => asm volatile ("mv %[sp], sp"
             : [sp] "=r" (-> usize),
         ),

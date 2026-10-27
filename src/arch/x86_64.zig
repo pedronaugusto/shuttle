@@ -47,6 +47,7 @@ comptime {
 /// The control state of the running code.
 pub fn control() Control {
     var c: Control = .{ .mxcsr = 0, .x87 = 0 };
+    // aegis: boundary: reads MXCSR and the x87 control word, which a context saves and restores
     asm volatile (
         \\ stmxcsr (%%rax)
         \\ fnstcw 4(%%rax)
@@ -61,10 +62,12 @@ pub fn control() Control {
 /// address goes in the register a new context's entry takes its second
 /// argument in (rsi, or rdx on Windows), so the trampoline need not move it.
 pub inline fn swap(t: *const Transfer) *const Transfer {
+    // aegis: boundary: the switch itself: saves the running context's registers into `t.from` and loads `t.to`'s, as the Windows x64 convention has them
     if (is_windows) return asm volatile (body("rdx")
         : [received] "={rdx}" (-> *const Transfer),
         : [sent] "0" (t),
         : clobbers(.rdx));
+    // aegis: boundary: the switch itself, as the System V convention has the registers
     return asm volatile (body("rsi")
         : [received] "={rsi}" (-> *const Transfer),
         : [sent] "0" (t),
@@ -221,7 +224,8 @@ pub const first_frame = 48;
 /// the 32 bytes of home space above the return address the callee may write.
 pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
     const sp = if (is_windows) top - first_frame + 8 else top - 16;
-    const slots: [*]usize = @ptrFromInt(sp); // safe: inside the stack, below its top
+    // aegis: internal: inside the stack, below its top
+    const slots: [*]usize = @ptrFromInt(sp);
     if (is_windows) {
         slots[0] = 0;
         slots[1] = arg;
@@ -235,10 +239,12 @@ pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
 
 /// The first instructions of a context.
 pub fn trampoline() callconv(.naked) noreturn {
+    // aegis: boundary: the first frame's entry: moves the entry and argument `initial` laid in into the Windows x64 argument registers
     if (is_windows) asm volatile (
         \\ movq 8(%%rsp), %%rcx
         \\ movq 16(%%rdx), %%rdx
         \\ jmpq *16(%%rsp)
+        // aegis: boundary: as above, into the System V argument registers
     ) else asm volatile (
         \\ .cfi_undefined %%rip
         \\ movq 0(%%rsp), %%rdi

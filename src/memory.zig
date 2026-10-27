@@ -36,11 +36,13 @@ fn allocate(len: usize, kind: windows.MEM.ALLOCATE, protection: windows.PAGE) Er
     // pointer, so the null goes in through an optional of the same layout.
     var base: ?windows.PVOID = null;
     var size: windows.SIZE_T = len;
-    switch (windows.ntdll.NtAllocateVirtualMemory(windows.current_process, @ptrCast(&base), 0, &size, kind, protection)) { // safe: an optional pointer has the pointer's layout, null as zero
+    // aegis: boundary: an optional pointer has the pointer's layout, null as zero
+    switch (windows.ntdll.NtAllocateVirtualMemory(windows.current_process, @ptrCast(&base), 0, &size, kind, protection)) {
         .SUCCESS => {},
         else => return error.SystemResources,
     }
-    const start: [*]align(page_size_min) u8 = @ptrCast(@alignCast(base.?)); // safe: the system hands out whole pages
+    // aegis: boundary: the system hands out whole pages
+    const start: [*]align(page_size_min) u8 = @ptrCast(@alignCast(base.?));
     return start[0..len];
 }
 
@@ -134,6 +136,7 @@ pub fn maxMapCount() ?u64 {
 
 /// The page range `[from, to)`, both page-aligned.
 pub fn pages(from: usize, to: usize) Pages {
-    const start: [*]align(page_size_min) u8 = @ptrFromInt(from); // safe: callers pass page boundaries of a reservation of theirs
+    // aegis: internal: callers pass page boundaries of a reservation of theirs
+    const start: [*]align(page_size_min) u8 = @ptrFromInt(from);
     return start[0 .. to - from];
 }

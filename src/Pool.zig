@@ -37,6 +37,7 @@ const Pool = @This();
 
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const memory = @import("memory.zig");
 const Stack = @import("Stack.zig");
 
@@ -81,7 +82,10 @@ classes: []Shelf,
 reservation: memory.Pages,
 guard: Stack.Guard,
 /// Stacks handed out and not given back.
-in_use: std.atomic.Value(u32) = .init(0),
+in_use: aegis.Atomic(Stacks) = .init(.fromRaw(0)),
+
+/// A number of stacks.
+const Stacks = aegis.units.Count(struct {}, u32);
 
 /// One class's stacks.
 const Shelf = struct {
@@ -92,14 +96,14 @@ const Shelf = struct {
     /// The lowest byte of the class's stacks, in the pool's reservation.
     base: usize = 0,
     /// Per stack, the next on its list, plus one; zero ends the list.
-    links: []u32,
+    links: []aegis.Atomic(Link),
     /// Stacks made usable and given back: what `take` hands out first,
     /// as they are.
     free: List = .{},
     /// Stacks the system refused to make usable, to be tried again.
     unmade: List = .{},
     /// The stacks from this one up have never been handed out.
-    fresh: std.atomic.Value(u32) = .init(0),
+    fresh: aegis.Atomic(Stacks) = .init(.fromRaw(0)),
     /// Windows: per stack, its lowest committed byte. Only the stack's
     /// holder touches its entry, and only stacks below `fresh` have one.
     limits: if (is_windows) []usize else void,
@@ -109,7 +113,7 @@ const Shelf = struct {
 
     fn init(gpa: std.mem.Allocator, class: Class, options: Options) InitError!Shelf {
         const layout = try Stack.Layout.of(.{ .size = class.size, .guard = options.guard, .commit = options.commit });
-        const links = try gpa.alloc(u32, class.count);
+        const links = try gpa.alloc(aegis.Atomic(Link), class.count);
         errdefer gpa.free(links);
         const limits = if (is_windows) try gpa.alloc(usize, class.count) else {};
         errdefer if (is_windows) gpa.free(limits);
@@ -150,8 +154,9 @@ const Shelf = struct {
     /// left.
     fn claim(s: *Shelf) ?u32 {
         var next = s.fresh.load(.monotonic);
-        while (next < s.count) {
-            next = s.fresh.cmpxchgWeak(next, next + 1, .monotonic, .monotonic) orelse return next;
+        while (next.compare(.fromRaw(s.count)) == .lt) {
+            const after = next.add(.fromRaw(1)) catch unreachable; // unreachable: below the class's count, a u32
+            next = s.fresh.cmpxchgWeak(next, after, .monotonic, .monotonic) orelse return next.raw();
         }
         return null;
     }
@@ -160,31 +165,59 @@ const Shelf = struct {
 /// A lock-free stack of a class's stack indices, linked through the
 /// class's `links`, its head tagged against reuse.
 const List = struct {
-    head: std.atomic.Value(u64) = .init(0),
+    head: aegis.Atomic(Head) = .init(.of(.{ .index_plus_one = .end, .tag = 0 })),
 
-    fn pop(l: *List, links: []u32) ?u32 {
-        var raw = l.head.load(.acquire);
+    fn pop(l: *List, links: []aegis.Atomic(Link)) ?u32 {
+        var head = l.head.load(.acquire);
         while (true) {
-            const f: Free = @bitCast(raw);
-            if (f.index_plus_one == 0) return null;
-            const index = f.index_plus_one - 1;
-            const next: Free = .{ .index_plus_one = @atomicLoad(u32, &links[index], .monotonic), .tag = f.tag +% 1 };
-            raw = l.head.cmpxchgWeak(raw, @bitCast(next), .acq_rel, .acquire) orelse return index;
+            const f = head.free();
+            const index = f.index_plus_one.index() orelse return null;
+            const next: Free = .{ .index_plus_one = links[index].load(.monotonic), .tag = f.tag +% 1 };
+            head = l.head.cmpxchgWeak(head, .of(next), .acq_rel, .acquire) orelse return index;
         }
     }
 
-    fn push(l: *List, links: []u32, index: u32) void {
-        var raw = l.head.load(.monotonic);
+    fn push(l: *List, links: []aegis.Atomic(Link), index: u32) void {
+        var head = l.head.load(.monotonic);
         while (true) {
-            const f: Free = @bitCast(raw);
-            @atomicStore(u32, &links[index], f.index_plus_one, .monotonic);
-            const next: Free = .{ .index_plus_one = index + 1, .tag = f.tag +% 1 };
-            raw = l.head.cmpxchgWeak(raw, @bitCast(next), .release, .monotonic) orelse return;
+            const f = head.free();
+            links[index].store(f.index_plus_one, .monotonic);
+            const next: Free = .{ .index_plus_one = .of(index), .tag = f.tag +% 1 };
+            head = l.head.cmpxchgWeak(head, .of(next), .release, .monotonic) orelse return;
         }
     }
 };
 
-const Free = packed struct(u64) { index_plus_one: u32, tag: u32 };
+const Free = packed struct(u64) { index_plus_one: Link, tag: u32 };
+
+/// A list's head as its cell holds it: a `Free`, all 64 bits.
+const Head = enum(u64) {
+    _,
+
+    fn of(f: Free) Head {
+        return @fromBackingInt(@as(u64, @bitCast(f)));
+    }
+
+    fn free(h: Head) Free {
+        return @bitCast(@backingInt(h));
+    }
+};
+
+/// A stack's index plus one on a list, zero ending it.
+const Link = enum(u32) {
+    end = 0,
+    _,
+
+    fn of(stack: u32) Link {
+        return @fromBackingInt(stack + 1);
+    }
+
+    /// The stack it names, or null at the end.
+    fn index(l: Link) ?u32 {
+        if (l == .end) return null;
+        return @backingInt(l) - 1;
+    }
+};
 
 pub fn init(gpa: std.mem.Allocator, options: Options) InitError!Pool {
     if (options.classes.len > std.math.maxInt(u16)) return error.InvalidClasses;
@@ -294,7 +327,7 @@ fn make(p: *Pool, class: u16) TakeError!?Stack {
 }
 
 fn handOut(p: *Pool, class: u16, index: u32) Stack {
-    _ = p.in_use.fetchAdd(1, .monotonic);
+    _ = p.in_use.fetchAddWrapping(.fromRaw(1), .monotonic);
     return p.classes[class].stack(class, index);
 }
 
@@ -307,19 +340,19 @@ pub fn give(p: *Pool, stack: Stack) void {
     if (is_windows) shelf.limits[slot.index] = @min(shelf.limits[slot.index], s.limit);
     shelf.free.push(shelf.links, slot.index);
     // Zero publishes the last give after it stopped touching the pool.
-    _ = p.in_use.fetchSub(1, .release);
+    _ = p.in_use.fetchSubWrapping(.fromRaw(1), .release);
 }
 
 /// The stacks handed out and not given back.
 pub fn inUse(p: *const Pool) u32 {
-    return p.in_use.load(.acquire);
+    return p.in_use.load(.acquire).raw();
 }
 
 /// The stacks ever handed out, or tried: those that cost more than address
 /// space. At most `count()`.
 pub fn reached(p: *const Pool) u32 {
     var n: u32 = 0;
-    for (p.classes) |*s| n += s.fresh.load(.monotonic);
+    for (p.classes) |*s| n += s.fresh.load(.monotonic).raw();
     return n;
 }
 

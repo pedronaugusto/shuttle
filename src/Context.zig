@@ -32,16 +32,16 @@ registers: native.Registers = undefined,
 bounds: if (is_windows) teb.Bounds else void = if (is_windows) undefined else {},
 /// ThreadSanitizer's record of the context.
 fiber: sanitizer.Fiber = sanitizer.none,
-/// What the context's code runs inside (the coroutine whose code it is),
-/// saved while the context is suspended. A switch saves the thread's into
-/// the context it leaves and installs the one it resumes, so it moves with
-/// the context to whichever thread resumes it. A coroutine's own context
-/// names the coroutine; `.{}` and `init` name nothing.
-inside: ?*anyopaque = null,
+/// What the context's code runs inside (the context of the coroutine whose
+/// code it is), saved while the context is suspended. A switch saves the
+/// thread's into the context it leaves and installs the one it resumes, so
+/// it moves with the context to whichever thread resumes it. A coroutine's
+/// own context names itself; `.{}` and `init` name nothing.
+inside: ?*Context = null,
 
 /// What the code running on this thread runs inside: the `inside` of its
 /// context, installed by the switch that resumed it.
-threadlocal var running_inside: ?*anyopaque = null;
+threadlocal var running_inside: ?*Context = null;
 
 /// This thread's slot, its address taken afresh at every call. The compiler
 /// may otherwise reuse a thread-local's address computed before a switch
@@ -49,16 +49,17 @@ threadlocal var running_inside: ?*anyopaque = null;
 /// address is a register read it merges freely (reactor's lanes crashed so
 /// in optimized builds). The address passes through an assembly statement,
 /// which the compiler cannot see through.
-noinline fn insideSlot() *?*anyopaque {
+noinline fn insideSlot() *?*Context {
+    // aegis: boundary: the slot's address passes through the processor unchanged, so the compiler cannot reuse one from before a switch
     return asm volatile (""
-        : [address] "=r" (-> *?*anyopaque),
+        : [address] "=r" (-> *?*Context),
         : [slot] "0" (&running_inside),
     );
 }
 
 /// What the running code runs inside, as `inside` names it: null outside
 /// any coroutine.
-pub fn runningInside() ?*anyopaque {
+pub fn runningInside() ?*Context {
     return insideSlot().*;
 }
 
@@ -79,7 +80,8 @@ pub const headroom = 64;
 pub fn init(stack: *Stack, entry: Entry, arg: ?*anyopaque) error{StackTooSmall}!Context {
     const top = stack.top - headroom;
     try stack.reach(top - native.first_frame);
-    const above: [*]u8 = @ptrFromInt(top); // safe: the headroom inside the stack, committed by `reach`
+    // aegis: internal: the headroom inside the stack, committed by `reach`
+    const above: [*]u8 = @ptrFromInt(top);
     @memset(above[0..headroom], 0);
     const registers = native.initial(top, @intFromPtr(entry), @intFromPtr(arg), @intFromPtr(&native.trampoline)); // safe: addresses, laid in the first frame and read back as functions and an argument
     return .{

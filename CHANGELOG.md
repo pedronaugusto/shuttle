@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Context.inside` and `Context.runningInside()` are a `?*Context`, where they were an erased pointer: the context of the coroutine whose code runs on a context, which names itself. A coroutine finds itself from it with `@fieldParentPtr`.
+- `Stack.carve(T)` takes a type and returns a `*T` aligned for it, where it took a length and an alignment and returned bytes.
+- `Pool.in_use` is an aegis atomic cell of a count of stacks; `inUse()` reads it as before.
+
+### Changed
+
+- On aegis 0.2.1, under the aegis pack: a coroutine's life (fresh, running, suspended, returned, panicked) is an aegis state machine; its body is handed a `Yielder` that holds the coroutine, and its arguments sit beside it in one frame carved from the stack, so the entry is told where both are in its one argument; the pool's counters, its lists' heads and links are aegis atomic cells; a panic's trace is copied out rather than cast to the mutable slice std's writer names. The processor's and the system's seams (the switch, the first frame's entry, the control registers, the thread information block, the system's pages, ThreadSanitizer's fibers, frame records) carry their contract where they are.
+
 ## [0.3.3] - 2026-10-24
 
 ### Changed

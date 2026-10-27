@@ -162,15 +162,17 @@ pub fn reach(s: *Stack, low: usize) error{StackTooSmall}!void {
     s.limit = want;
 }
 
-/// Takes `len` bytes aligned to `alignment` from the top of the stack, for
-/// what lives as long as the code on it: a coroutine's state, its
-/// arguments. The stack below is what is left to run on.
-pub fn carve(s: *Stack, len: usize, alignment: std.mem.Alignment) error{StackTooSmall}![*]u8 {
+/// Takes a `T` from the top of the stack, for what lives as long as the
+/// code on it: a coroutine's state and its arguments. The stack below is
+/// what is left to run on.
+pub fn carve(s: *Stack, comptime T: type) error{StackTooSmall}!*T {
+    const len = @sizeOf(T);
     if (len > s.top - s.bottom) return error.StackTooSmall;
-    const at = std.mem.alignBackward(usize, s.top - len, @max(alignment.toByteUnits(), 16));
+    const at = std.mem.alignBackward(usize, s.top - len, @max(@alignOf(T), 16));
     try s.reach(at);
     s.top = at;
-    return @ptrFromInt(at); // safe: inside the stack's usable bytes, committed
+    // aegis: internal: an address inside the stack's usable bytes, committed by `reach`, aligned for a `T` and with room for one just above
+    return @ptrFromInt(at);
 }
 
 /// The usable bytes, what has been carved included.
@@ -202,7 +204,8 @@ pub fn discard(s: *const Stack, keep_from: usize) void {
 /// Tells Valgrind the stack is one, so that a switch onto it is not taken
 /// for an enormous frame.
 pub fn register(s: *Stack) void {
-    const usable: [*]u8 = @ptrFromInt(s.bottom); // safe: the stack's own bytes, named to Valgrind
+    // aegis: internal: the stack's own bytes, named to Valgrind
+    const usable: [*]u8 = @ptrFromInt(s.bottom);
     s.valgrind = std.valgrind.stackRegister(usable[0 .. s.end - s.bottom]);
 }
 
