@@ -339,3 +339,17 @@ test "a context carries one message type: init names it, a thread's own context 
     try std.testing.expect(made_context.carriesKind(Context.kindOf(*u32)));
     try std.testing.expect(!made_context.carriesKind(Context.kindOf(Context.Nothing)));
 }
+
+test "a context is handed a C function's address, and refused a Zig function's, a slice or a value" {
+    const Task = struct { n: u32 };
+    const Zig = *const fn (*Task) noreturn;
+    const C = *const fn (*Task) callconv(.c) noreturn;
+    try std.testing.expect(Context.argRefusal(*Task) == null);
+    try std.testing.expect(Context.argRefusal(?*Task) == null);
+    try std.testing.expect(Context.argRefusal(C) == null);
+    try std.testing.expect(Context.argRefusal(?C) == null);
+    try std.testing.expect(std.mem.find(u8, Context.argRefusal(Zig).?, "callconv(.c)") != null);
+    try std.testing.expect(std.mem.find(u8, Context.argRefusal(?Zig).?, "callconv(.c)") != null);
+    try std.testing.expect(Context.argRefusal([]Task) != null);
+    try std.testing.expect(Context.argRefusal(u64) != null);
+}

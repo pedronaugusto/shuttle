@@ -106,12 +106,26 @@ pub fn Entry(comptime Arg: type, comptime Message: type) type {
 
 /// What the first argument register holds: an address, never a slice.
 fn checkArg(comptime Arg: type) void {
+    if (argRefusal(Arg)) |why| @compileError(why);
+}
+
+/// Why `Arg` cannot be a context's argument, or null when it can: it is one
+/// address, in the first argument register of a C call. A function's
+/// address goes there only under the C calling convention, the one a C
+/// parameter may name.
+pub fn argRefusal(comptime Arg: type) ?[]const u8 {
     const pointer = switch (@typeInfo(Arg)) {
         .pointer => |p| p,
-        .optional => |o| if (@typeInfo(o.child) == .pointer) @typeInfo(o.child).pointer else @compileError("a context's argument is a pointer or an optional one, not " ++ @typeName(Arg)),
-        else => @compileError("a context's argument is a pointer or an optional one, not " ++ @typeName(Arg)),
+        .optional => |o| if (@typeInfo(o.child) == .pointer) @typeInfo(o.child).pointer else return "a context's argument is a pointer or an optional one, not " ++ @typeName(Arg),
+        else => return "a context's argument is a pointer or an optional one, not " ++ @typeName(Arg),
     };
-    if (pointer.size == .slice) @compileError("a context's argument is one address, not the slice " ++ @typeName(Arg));
+    if (pointer.size == .slice) return "a context's argument is one address, not the slice " ++ @typeName(Arg);
+    switch (@typeInfo(pointer.child)) {
+        .@"fn" => |f| if (!std.meta.eql(f.attrs.@"callconv", std.builtin.CallingConvention.c))
+            return "a function a context is handed is callconv(.c), as the C call that hands it over: not " ++ @typeName(Arg),
+        else => {},
+    }
+    return null;
 }
 
 /// What a switch hands over: one address, which the side switched to may
