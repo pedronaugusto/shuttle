@@ -274,3 +274,22 @@ test "a stack the system refuses to make usable is an error at its take, and is 
     pool.give(made);
     pool.give(held);
 }
+
+test "a stack gives bytes of a size and an alignment known only at run time from its top, each below the last" {
+    var stack = try Stack.init(.{ .size = .fromRaw(64 * 1024) });
+    defer stack.deinit();
+    const sizes = [_]usize{ 24, 1, 200, 4096 };
+    const alignments = [_]std.mem.Alignment{ .@"8", .@"1", .@"64", .fromByteUnits(4096) };
+    var above = stack.top;
+    for (sizes, alignments) |len, alignment| {
+        const bytes = try stack.carveBytes(len, alignment);
+        const at = @intFromPtr(bytes);
+        try std.testing.expect(alignment.check(at) and at % 16 == 0);
+        try std.testing.expect(at + len <= above and at == stack.top);
+        @memset(bytes[0..len], 0xa5);
+        above = at;
+    }
+    const typed = try stack.carve(extern struct { a: u64, b: u32 });
+    try std.testing.expect(@intFromPtr(typed) + @sizeOf(@TypeOf(typed.*)) <= above);
+    try std.testing.expectError(error.StackTooSmall, stack.carveBytes(64 * 1024, .@"16"));
+}

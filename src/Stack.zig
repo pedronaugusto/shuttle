@@ -166,12 +166,22 @@ pub fn reach(s: *Stack, low: usize) error{StackTooSmall}!void {
 /// code on it: a coroutine's state and its arguments. The stack below is
 /// what is left to run on.
 pub fn carve(s: *Stack, comptime T: type) error{StackTooSmall}!*T {
-    const len = @sizeOf(T);
+    const bytes = try s.carveBytes(@sizeOf(T), .of(T));
+    // aegis: internal: `carveBytes` gave room for a `T` at an address aligned for one
+    return @ptrCast(@alignCast(bytes));
+}
+
+/// Takes `len` bytes aligned to `alignment` from the top of the stack: what
+/// `carve` does for a size and an alignment known only at run time, as a
+/// runtime's task context and result are. The alignment is at least 16, the
+/// stack's own, so the stack below stays aligned for a call.
+pub fn carveBytes(s: *Stack, len: usize, alignment: std.mem.Alignment) error{StackTooSmall}![*]u8 {
     if (len > s.top - s.bottom) return error.StackTooSmall;
-    const at = std.mem.alignBackward(usize, s.top - len, @max(@alignOf(T), 16));
+    const at = std.mem.alignBackward(usize, s.top - len, @max(alignment.toByteUnits(), 16));
+    if (at < s.bottom) return error.StackTooSmall;
     try s.reach(at);
     s.top = at;
-    // aegis: internal: an address inside the stack's usable bytes, committed by `reach`, aligned for a `T` and with room for one just above
+    // aegis: internal: an address inside the stack's usable bytes, committed by `reach`, aligned as asked and with `len` bytes just above
     return @ptrFromInt(at);
 }
 
