@@ -15,6 +15,8 @@
 //! allocates there and ignores in a clobber list; on Linux it is an ordinary
 //! temporary and the clobber counts.
 const builtin = @import("builtin");
+const std = @import("std");
+const teb = @import("../teb.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -36,8 +38,14 @@ pub const Registers = extern struct {
     control: Control,
 };
 
-/// What a switch hands from one side to the other.
-pub const Transfer = extern struct {
+/// What a switch hands from one side to the other; on Windows also the
+/// stack bounds it exchanges.
+pub const Transfer = if (is_windows) extern struct {
+    from: *Registers,
+    to: *Registers,
+    message: ?*anyopaque,
+    bounds: teb.Exchange,
+} else extern struct {
     from: *Registers,
     to: *Registers,
     message: ?*anyopaque,
@@ -45,6 +53,7 @@ pub const Transfer = extern struct {
 
 comptime {
     if (@offsetOf(Registers, "lr") != 24 or @offsetOf(Registers, "control") != 32 or @offsetOf(Transfer, "message") != 16) @compileError("the switch reads these offsets");
+    if (is_windows and @offsetOf(Transfer, "bounds") != 24) @compileError("the switch reads these offsets");
 }
 
 pub fn control() Control {
@@ -55,7 +64,9 @@ pub fn control() Control {
 
 /// Saves the running context into `t.from`, loads `t.to` and runs it.
 /// Returns the transfer that resumed this context later; it travels in x1,
-/// where a new context's entry takes its second argument.
+/// where a new context's entry takes its second argument. On Windows the
+/// stack bounds are exchanged last, just before the stack pointer moves
+/// (`teb`).
 pub inline fn swap(t: *const Transfer) *const Transfer {
     return asm volatile (
         \\ ldp x0, x2, [x1]
@@ -70,6 +81,8 @@ pub inline fn swap(t: *const Transfer) *const Transfer {
         \\ b.eq 1f
         \\ msr fpcr, x6
         \\ 1:
+        \\
+    ++ (if (is_windows) exchange else "") ++
         \\ ldp x3, x29, [x2]
         \\ ldp x4, x30, [x2, #16]
         \\ mov sp, x3
@@ -79,6 +92,26 @@ pub inline fn swap(t: *const Transfer) *const Transfer {
         : [sent] "0" (t),
         : clobbers);
 }
+
+/// Windows: the thread information block's stack fields saved into the
+/// transfer's `bounds.save` and loaded from its `bounds.load`, in x7 to x10.
+const exchange = std.fmt.comptimePrint(
+    \\ ldp x7, x8, [x1, #24]
+    \\ ldr x9, [x1, #40]
+    \\ ldr x10, [x7, #{0d}]
+    \\ str x10, [x8]
+    \\ ldr x10, [x7, #{1d}]
+    \\ str x10, [x8, #8]
+    \\ ldr x10, [x7, #{2d}]
+    \\ str x10, [x8, #16]
+    \\ ldr x10, [x9]
+    \\ str x10, [x7, #{0d}]
+    \\ ldr x10, [x9, #8]
+    \\ str x10, [x7, #{1d}]
+    \\ ldr x10, [x9, #16]
+    \\ str x10, [x7, #{2d}]
+    \\
+, .{ teb.base_offset, teb.limit_offset, teb.deallocation_offset });
 
 /// Every register the code on the other side may change, but the stack and
 /// frame pointers and the transfer's own, which is the output: an input

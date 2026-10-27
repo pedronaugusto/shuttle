@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A switch on Windows no longer runs code on a stack the thread information block does not describe. It set the next stack's bounds, then made calls on the stack it was leaving; a call that first touched that stack's guard page was not grown by the system but raised a guard page violation no handler took, which ended the process with no message (0xC0000005 or a bare exit code). It took a switch from a stack to one below it, at the depth in a page where the switch's own calls reached a page nothing above it had: uplink's HTTP/2 server tests on reactor's Windows runtime, Debug builds, ended so. The switch's assembly now exchanges the bounds as it moves the stack pointer (`teb.Exchange`), on x86_64 and aarch64.
+
 ## [0.3.3] - 2026-10-24
 
 ### Changed
