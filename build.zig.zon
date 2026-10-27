@@ -17,8 +17,8 @@
         },
 
         .shakedown = .{
-            .url = "git+https://github.com/pedronaugusto/shakedown?ref=aegis-0.2#9a4140e4a783690da260f556e6c5decf5944fa34",
-            .hash = "shakedown-0.4.18-BR8U498oFwAT5BMzQZvD_95ntC0m-mvZdZF75e19qT57",
+            .url = "git+https://github.com/pedronaugusto/shakedown?ref=v0.5.0#da52bc2e82735906f940a683dd389be2b824adce",
+            .hash = "shakedown-0.5.0-BR8U4wh0FwBSVSfRI-lCTNYLySIZxCQtpQ5-8ochBm0m",
         },
     },
 }
