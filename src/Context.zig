@@ -38,6 +38,31 @@ fiber: sanitizer.Fiber = sanitizer.none,
 /// it moves with the context to whichever thread resumes it. A coroutine's
 /// own context names itself; `.{}` and `init` name nothing.
 inside: ?*Context = null,
+/// The message type every switch to the context carries (`kindOf`): named
+/// by `init`, or by the first switch from a thread's own context, and
+/// checked by every switch after.
+carries: ?*const Kind = null,
+
+/// A message type, as a context records the one its switches carry: one
+/// address per type, holding its name for the panic that refuses another.
+pub const Kind = struct { name: []const u8 };
+
+/// The `Kind` of `Message`, the same address wherever it is asked for.
+pub fn kindOf(comptime Message: type) *const Kind {
+    return &struct {
+        const kind: Kind = .{ .name = @typeName(Message) };
+    }.kind;
+}
+
+/// Whether `c` carries `kind`, recording it on a context that has not
+/// carried any yet.
+pub fn carriesKind(c: *Context, kind: *const Kind) bool {
+    const known = c.carries orelse {
+        c.carries = kind;
+        return true;
+    };
+    return known == kind;
+}
 
 /// What the code running on this thread runs inside: the `inside` of its
 /// context, installed by the switch that resumed it.
@@ -116,6 +141,7 @@ pub fn init(stack: *Stack, comptime Arg: type, comptime Message: type, entry: En
         .registers = registers,
         .bounds = if (is_windows) .{ .base = stack.end, .limit = stack.limit, .deallocation = stack.base } else {},
         .fiber = sanitizer.create(),
+        .carries = kindOf(Message),
     };
 }
 
@@ -140,6 +166,11 @@ pub fn deinit(c: *Context, stack: *Stack) void {
 /// four times the switch itself.
 pub inline fn switchTo(from: *Context, to: *Context, comptime Message: type, message: ?Message) ?Message {
     comptime checkMessage(Message);
+    // Both sides carry `Message`: `to` is switched to with one, and `from`
+    // will be resumed with one.
+    const kind = kindOf(Message);
+    if (!to.carriesKind(kind)) mismatch(to, kind);
+    if (!from.carriesKind(kind)) mismatch(from, kind);
     if (sanitizer.enabled) {
         from.fiber = sanitizer.current();
         sanitizer.switchTo(to.fiber);
@@ -153,6 +184,12 @@ pub inline fn switchTo(from: *Context, to: *Context, comptime Message: type, mes
         .{ .from = &from.registers, .to = &to.registers, .message = message };
     // aegis: boundary: the swap hands back the word the switch that resumed `from` sent, which every switch to `from` sends as a `Message`
     return @ptrCast(@alignCast(native.swap(&t).message));
+}
+
+/// A switch with a message `c` does not carry, to it or from it, which would
+/// hand its code a word as the wrong type.
+fn mismatch(c: *const Context, kind: *const Kind) noreturn {
+    std.debug.panic("shuttle: a switch carrying {s} at a context whose switches carry {s}", .{ kind.name, c.carries.?.name });
 }
 
 /// The stack pointer of a suspended context: everything it keeps on its

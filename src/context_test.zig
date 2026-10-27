@@ -39,9 +39,9 @@ fn end(c: *Context) void {
     };
 }
 
-test "a context is what a switch saves: its registers, what its code runs inside, and on Windows its stack bounds, and under ThreadSanitizer its fiber" {
+test "a context is what a switch saves: its registers, what its code runs inside, the message type its switches carry, and on Windows its stack bounds, and under ThreadSanitizer its fiber" {
     const native = @import("arch.zig").native;
-    var size: usize = @sizeOf(native.Registers) + @sizeOf(?*anyopaque);
+    var size: usize = @sizeOf(native.Registers) + 2 * @sizeOf(?*anyopaque);
     if (builtin.os.tag == .windows) size += @sizeOf(teb.Bounds);
     if (builtin.sanitize_thread) size += @sizeOf(usize);
     try std.testing.expectEqual(std.mem.alignForward(usize, size, @alignOf(Context)), @sizeOf(Context));
@@ -316,4 +316,26 @@ fn switchAtDepth(comptime pad: usize) !void {
     const outer = teb.get();
     _ = Context.switchTo(&Probe.driver, &Probe.low, Context.Nothing, null);
     try std.testing.expectEqual(outer, teb.get());
+}
+
+test "a context carries one message type: init names it, a thread's own context takes the first, and another is refused" {
+    var own: Context = .{};
+    try std.testing.expect(own.carriesKind(Context.kindOf(*u32)));
+    try std.testing.expect(own.carriesKind(Context.kindOf(*u32)));
+    try std.testing.expect(!own.carriesKind(Context.kindOf(*u64)));
+    try std.testing.expect(!own.carriesKind(Context.kindOf(Context.Nothing)));
+    try std.testing.expectEqualStrings(@typeName(*u32), own.carries.?.name);
+    // One address per type, wherever it is asked for.
+    try std.testing.expectEqual(Context.kindOf(*u64), Context.kindOf(*u64));
+    if (!supported) return;
+    const Probe = struct {
+        fn run(_: ?Context.Nothing, _: ?*u32) callconv(.c) noreturn {
+            unreachable; // unreachable: the test never runs it
+        }
+    };
+    var made_context: Context = undefined;
+    try make(&made_context, ?Context.Nothing, *u32, Probe.run, null);
+    defer end(&made_context);
+    try std.testing.expect(made_context.carriesKind(Context.kindOf(*u32)));
+    try std.testing.expect(!made_context.carriesKind(Context.kindOf(Context.Nothing)));
 }

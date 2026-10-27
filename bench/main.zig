@@ -34,6 +34,8 @@ const Bench = struct {
     }
 
     fn switchSetup(b: *Bench) WorkloadError!void {
+        // A fresh thread context: each workload's switches carry their own message type.
+        b.driver = .{};
         b.stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
         b.task = try shuttle.Context.init(&b.stack, *Bench, shuttle.Context.Nothing, bounce, b);
     }
@@ -59,6 +61,7 @@ const Bench = struct {
     }
 
     fn handoffSetup(b: *Bench) WorkloadError!void {
+        b.driver = .{};
         b.stack = try shuttle.Stack.init(.{ .size = .fromRaw(64 * 1024) });
         b.task = try shuttle.handoff.init(&b.stack, *Bench, handoffBody, b);
     }
