@@ -28,7 +28,7 @@ const is_windows = builtin.os.tag == .windows;
 /// Saved while the context is suspended.
 registers: native.Registers = undefined,
 /// Windows: the thread information block's stack fields, saved while the
-/// context is suspended.
+/// context is suspended; the switch's assembly exchanges them.
 bounds: if (is_windows) teb.Bounds else void = if (is_windows) undefined else {},
 /// ThreadSanitizer's record of the context.
 fiber: sanitizer.Fiber = sanitizer.none,
@@ -114,14 +114,13 @@ pub inline fn switchTo(from: *Context, to: *Context, message: ?*anyopaque) ?*any
         from.fiber = sanitizer.current();
         sanitizer.switchTo(to.fiber);
     }
-    if (is_windows) {
-        from.bounds = teb.get();
-        teb.set(to.bounds);
-    }
     const slot = insideSlot();
     from.inside = slot.*;
     slot.* = to.inside;
-    const t: native.Transfer = .{ .from = &from.registers, .to = &to.registers, .message = message };
+    const t: native.Transfer = if (is_windows)
+        .{ .from = &from.registers, .to = &to.registers, .message = message, .bounds = teb.exchange(&from.bounds, &to.bounds) }
+    else
+        .{ .from = &from.registers, .to = &to.registers, .message = message };
     return native.swap(&t).message;
 }
 

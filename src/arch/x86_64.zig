@@ -12,6 +12,8 @@
 //! and the values the compiler kept in `xmm` registers did not survive a
 //! switch (std's `Io.fiber.contextSwitch` names only `zmm`).
 const builtin = @import("builtin");
+const std = @import("std");
+const teb = @import("../teb.zig");
 
 const is_windows = builtin.os.tag == .windows;
 
@@ -33,8 +35,14 @@ pub const Registers = extern struct {
 };
 
 /// What a switch hands from one side to the other: where to save, what to
-/// load, and the message. Read by the assembly at these offsets.
-pub const Transfer = extern struct {
+/// load, and the message; on Windows also the stack bounds it exchanges.
+/// Read by the assembly at these offsets.
+pub const Transfer = if (is_windows) extern struct {
+    from: *Registers,
+    to: *Registers,
+    message: ?*anyopaque,
+    bounds: teb.Exchange,
+} else extern struct {
     from: *Registers,
     to: *Registers,
     message: ?*anyopaque,
@@ -42,6 +50,7 @@ pub const Transfer = extern struct {
 
 comptime {
     if (@offsetOf(Registers, "control") != 24 or @offsetOf(Transfer, "message") != 16) @compileError("the switch reads these offsets");
+    if (is_windows and @offsetOf(Transfer, "bounds") != 24) @compileError("the switch reads these offsets");
 }
 
 /// The control state of the running code.
@@ -77,8 +86,10 @@ pub inline fn swap(t: *const Transfer) *const Transfer {
 /// The transfer is in `sent`; rax and rcx hold the two register sets, r8
 /// the resume address. MXCSR and the x87 control word are written only when
 /// the context switched to keeps different ones: loading them costs more
-/// than the comparison. The register is spelt out, not an operand, because
-/// Zig's own x86_64 backend reads no operand inside a memory reference.
+/// than the comparison. On Windows the stack bounds are exchanged last,
+/// just before the stack pointer moves (`teb`). The register is spelt out,
+/// not an operand, because Zig's own x86_64 backend reads no operand inside
+/// a memory reference.
 fn body(comptime sent: []const u8) []const u8 {
     return "movq 0(%%" ++ sent ++ "), %%rax\n" ++
         "movq 8(%%" ++ sent ++ "), %%rcx\n" ++
@@ -94,11 +105,36 @@ fn body(comptime sent: []const u8) []const u8 {
         \\ ldmxcsr 24(%%rcx)
         \\ fldcw 28(%%rcx)
         \\ 1:
+        \\
+    ++ (if (is_windows) exchange(sent) else "") ++
         \\ movq 0(%%rcx), %%rsp
         \\ movq 8(%%rcx), %%rbp
         \\ jmpq *16(%%rcx)
         \\ 0:
     ;
+}
+
+/// Windows: the thread information block's stack fields saved into the
+/// transfer's `bounds.save` and loaded from its `bounds.load`, in r9 to r11.
+fn exchange(comptime sent: []const u8) []const u8 {
+    return std.fmt.comptimePrint(
+        \\ movq 24(%%{0s}), %%r10
+        \\ movq 32(%%{0s}), %%r11
+        \\ movq {1d}(%%r10), %%r9
+        \\ movq %%r9, 0(%%r11)
+        \\ movq {2d}(%%r10), %%r9
+        \\ movq %%r9, 8(%%r11)
+        \\ movq {3d}(%%r10), %%r9
+        \\ movq %%r9, 16(%%r11)
+        \\ movq 40(%%{0s}), %%r11
+        \\ movq 0(%%r11), %%r9
+        \\ movq %%r9, {1d}(%%r10)
+        \\ movq 8(%%r11), %%r9
+        \\ movq %%r9, {2d}(%%r10)
+        \\ movq 16(%%r11), %%r9
+        \\ movq %%r9, {3d}(%%r10)
+        \\
+    , .{ sent, teb.base_offset, teb.limit_offset, teb.deallocation_offset });
 }
 
 const Register = enum { rsi, rdx };
