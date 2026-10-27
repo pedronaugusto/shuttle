@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-27
+
 ### Added
 
 - `Stack.carveBytes(len, alignment)`: `carve` for a size and an alignment known only at run time, as a runtime's task context and result are (reactor's `Io.async` and `concurrent`). The alignment is at least 16, as `carve`'s is; `carve(T)` is built on it.
