@@ -1,6 +1,6 @@
 .{
     .name = .shuttle,
-    .version = "0.4.0",
+    .version = "0.4.1",
     .minimum_zig_version = "0.17.0",
     .fingerprint = 0xd64cb17be6a813d3,
     .paths = .{ "build.zig", "build.zig.zon", "src", "docs/design.md", "README.md", "CHANGELOG.md", "LICENSE" },
