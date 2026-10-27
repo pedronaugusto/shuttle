@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-27
+
 ### Breaking
 
 - `Context.inside` and `Context.runningInside()` are a `?*Context`, where they were an erased pointer: the context of the coroutine whose code runs on a context, which names itself. A coroutine finds itself from it with `@fieldParentPtr`.
