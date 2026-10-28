@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-28
+
 ### Breaking
 
 - A context's argument and its switches' message are typed: `Context.Entry(Arg, Message)` is `*const fn (arg: Arg, message: ?Message) callconv(.c) noreturn`, `Context.init(&stack, Arg, Message, entry, arg)` makes a context whose switches carry `Message`s, and `switchTo(from, to, Message, message)` returns a `?Message`, where each took and gave `?*anyopaque` and every caller cast it back. `Arg` is a pointer or an optional one, a function's address only under `callconv(.c)`, refused otherwise by name (`Context.argRefusal` says why), where a Zig function's address reached a C parameter the compiler refuses deep inside shuttle; `Message` a mutable single pointer, `Context.Nothing` for switches that carry none. The one conversion left is shuttle's, at the swap, and every build checks what it rests on: a context records the message type its switches carry (`Context.Kind`, from `init`, or the first switch for a thread's own context), and a switch carrying another, to it or from it, panics naming both types (`kindOf`, `carriesKind`). A coroutine's entry is handed its frame typed, without a cast.
