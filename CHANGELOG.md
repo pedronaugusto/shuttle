@@ -15,6 +15,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Stack.usable()`: the stack's usable bytes, `bottom` to `end`, for code that reads or fills a stack nothing runs on, as a scheduler measuring how deep its tasks went does. On Windows only the bytes from `limit` up are committed. Valgrind's registration reads them through it.
 
+### Changed
+
+- Pins aegis 0.2.3.
+
 ## [0.4.2] - 2026-10-27
 
 ### Added
