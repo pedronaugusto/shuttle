@@ -201,7 +201,7 @@ test "threads take and give a pool's stacks at once, each stack held by one at a
         fn run(pool: *Pool, owners: []std.atomic.Value(u32), me: u32) void {
             for (0..2000) |round| {
                 const size: @import("Stack.zig").Bytes = .fromRaw(if (round % 3 == 0) 128 * 1024 else 16 * 1024);
-                const s = (if (round % 2 == 0) pool.take(size) else pool.takeExactly(size)) catch @panic("a stack refused") orelse continue;
+                const s = ((if (round % 2 == 0) pool.take(size) else pool.takeExactly(size)) catch @panic("a stack refused")) orelse continue;
                 const n = pool.number(s);
                 // Nobody else holds it.
                 if (owners[n].swap(me, .acq_rel) != 0) @panic("a stack handed out twice");

@@ -288,7 +288,7 @@ fn Probe(comptime slots: usize) type {
 
 fn patterns(comptime n: usize, seed: u64) [n]u64 {
     var p: [n]u64 = undefined;
-    for (&p, 0..) |*v, i| v.* = seed *% (i + 1) ^ 0x5a5a_0000_0000_0000;
+    for (&p, 0..) |*v, i| v.* = (seed *% (i + 1)) ^ 0x5a5a_0000_0000_0000;
     return p;
 }
 
