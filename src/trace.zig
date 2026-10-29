@@ -36,7 +36,7 @@ pub fn walk(start: usize, low: usize, high: usize, out: []usize) []usize {
         const record_high = record_low +% 2 * @sizeOf(usize);
         if (fp % @alignOf(usize) != 0 or record_low < low or record_high > high or record_high < record_low) break;
         const caller = load(fp, native.record_caller);
-        const ra = load(fp, native.record_return);
+        const ra = native.returnAddress(load(fp, native.record_return));
         if (ra <= 1) break;
         out[n] = ra;
         n += 1;

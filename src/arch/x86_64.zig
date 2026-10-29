@@ -11,6 +11,11 @@
 //! only by a name the CPU has, so `zmm` alone means nothing without AVX-512,
 //! and the values the compiler kept in `xmm` registers did not survive a
 //! switch (std's `Io.fiber.contextSwitch` names only `zmm`).
+//!
+//! Where a switch jumps, to the resume address or a new context's
+//! trampoline, an `endbr64` marks the target as one an indirect jump may
+//! reach: CET's indirect branch tracking refuses any other. It is a no-op
+//! on a processor without CET, or with tracking off.
 const builtin = @import("builtin");
 const std = @import("std");
 const teb = @import("../teb.zig");
@@ -111,6 +116,7 @@ fn body(comptime sent: []const u8) []const u8 {
         \\ movq 8(%%rcx), %%rbp
         \\ jmpq *16(%%rcx)
         \\ 0:
+        \\ endbr64
     ;
 }
 
@@ -277,12 +283,14 @@ pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
 pub fn trampoline() callconv(.naked) noreturn {
     // aegis: boundary: the first frame's entry: moves the entry and argument `initial` laid in into the Windows x64 argument registers
     if (is_windows) asm volatile (
+        \\ endbr64
         \\ movq 8(%%rsp), %%rcx
         \\ movq 16(%%rdx), %%rdx
         \\ jmpq *16(%%rsp)
         // aegis: boundary: as above, into the System V argument registers
     ) else asm volatile (
         \\ .cfi_undefined %%rip
+        \\ endbr64
         \\ movq 0(%%rsp), %%rdi
         \\ movq 16(%%rsi), %%rsi
         \\ callq *8(%%rsp)
@@ -294,3 +302,8 @@ pub fn trampoline() callconv(.naked) noreturn {
 /// [fp + 8] the return address.
 pub const record_caller = 0;
 pub const record_return = 8;
+
+/// A return address as a frame record holds it: the address itself.
+pub fn returnAddress(saved: usize) usize {
+    return saved;
+}

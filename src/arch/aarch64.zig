@@ -14,6 +14,15 @@
 //! the platform register on Apple targets and Windows, which LLVM never
 //! allocates there and ignores in a clobber list; on Linux it is an ordinary
 //! temporary and the clobber counts.
+//!
+//! Where a switch branches, to the resume address or a new context's
+//! trampoline, a `bti j` (spelt `hint #36`, which assembles for every
+//! target) marks the target as one `br` may reach: on pages guarded by
+//! branch target identification any other faults. It is a no-op where BTI
+//! is absent or off. Return addresses signed with pointer authentication
+//! (`-mbranch-protection=pac-ret`) need nothing from the switch: each
+//! context's code signs and checks them against its own stack pointer,
+//! which the switch keeps, and a walk strips them (`returnAddress`).
 const builtin = @import("builtin");
 const std = @import("std");
 const teb = @import("../teb.zig");
@@ -90,6 +99,7 @@ pub inline fn swap(t: *const Transfer) *const Transfer {
         \\ mov sp, x3
         \\ br x4
         \\ 0:
+        \\ hint #36
         : [received] "={x1}" (-> *const Transfer),
         : [sent] "0" (t),
         : clobbers);
@@ -256,12 +266,14 @@ pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
 pub fn trampoline() callconv(.naked) noreturn {
     // aegis: boundary: the first frame's entry: moves the entry and argument `initial` laid in into AAPCS64's argument registers
     if (is_windows) asm volatile (
+        \\ hint #36
         \\ ldp x0, x9, [sp]
         \\ ldr x1, [x1, #16]
         \\ br x9
         // aegis: boundary: as above, outside Windows
     ) else asm volatile (
         \\ .cfi_undefined lr
+        \\ hint #36
         \\ ldp x0, x9, [sp]
         \\ ldr x1, [x1, #16]
         \\ blr x9
@@ -273,3 +285,16 @@ pub fn trampoline() callconv(.naked) noreturn {
 /// [fp + 8] the return address.
 pub const record_caller = 0;
 pub const record_return = 8;
+
+/// A return address as a frame record holds it, without the pointer
+/// authentication code that code compiled with return-address signing
+/// keeps in its top bits. XPACLRI (`hint #7`) is in the hint space: where
+/// pointer authentication is absent it does nothing, and an unsigned
+/// address comes back as it was.
+pub fn returnAddress(saved: usize) usize {
+    // aegis: boundary: strips a pointer authentication code, which only the processor can
+    return asm ("hint #7"
+        : [address] "={lr}" (-> usize),
+        : [saved] "0" (saved),
+    );
+}

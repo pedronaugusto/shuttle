@@ -215,3 +215,8 @@ pub fn trampoline() callconv(.naked) noreturn {
 /// it: [s0 - 16] the caller's s0, [s0 - 8] the return address.
 pub const record_caller = -16;
 pub const record_return = -8;
+
+/// A return address as a frame record holds it: the address itself.
+pub fn returnAddress(saved: usize) usize {
+    return saved;
+}
