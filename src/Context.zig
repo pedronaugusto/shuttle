@@ -143,14 +143,17 @@ pub const headroom = 64;
 /// to; its switches carry `Message`s. The first frame goes below
 /// `stack.top`, so what was carved above it stays; on Windows `stack`
 /// learns what was committed for it. The stack is the context's until
-/// `deinit`: nothing else may run on it.
+/// `deinit`: nothing else may run on it. On a thread with a shadow stack
+/// (`native.shadow_stacks`) the stack must have been made on one too, and
+/// so has a shadow stack of its own for the context's calls.
 pub fn init(stack: *Stack, comptime Arg: type, comptime Message: type, entry: Entry(Arg, Message), arg: Arg) error{StackTooSmall}!Context {
     const top = stack.top - headroom;
     try stack.reach(top - native.first_frame);
     // aegis: internal: the headroom inside the stack, committed by `reach`
     const above: [*]u8 = @ptrFromInt(top);
     @memset(above[0..headroom], 0);
-    const registers = native.initial(top, @intFromPtr(entry), @intFromPtr(arg), @intFromPtr(&native.trampoline)); // safe: addresses, laid in the first frame and read back as functions and an argument
+    if (native.shadow_stacks and stack.shadow.end == 0 and native.shadowStackPointer() != 0) noShadow();
+    const registers = native.initial(top, @intFromPtr(entry), @intFromPtr(arg), @intFromPtr(&native.trampoline), stack.shadow); // safe: addresses, laid in the first frame and read back as functions and an argument
     return .{
         .registers = registers,
         .bounds = if (is_windows) .{ .base = stack.end, .limit = stack.limit, .deallocation = stack.base } else {},
@@ -159,12 +162,22 @@ pub fn init(stack: *Stack, comptime Arg: type, comptime Message: type, entry: En
     };
 }
 
+/// A context whose calls would go on the shadow stack of the thread
+/// running it, and whose returns then fault far from here.
+fn noShadow() noreturn {
+    @branchHint(.cold);
+    std.debug.panic("shuttle: a context made on a thread with a shadow stack, on a stack made without one", .{});
+}
+
 /// Ends a context made by `init` on `stack`, which must not be running:
 /// the stack is free again. On Windows `stack` learns the pages its code
-/// committed, so a context made on it next starts with them.
+/// committed, so a context made on it next starts with them. With a shadow
+/// stack, `stack` learns where the context left its restore token, where
+/// the next context made on it starts.
 pub fn deinit(c: *Context, stack: *Stack) void {
     sanitizer.destroy(c.fiber);
     if (is_windows) stack.limit = @min(stack.limit, c.bounds.limit);
+    if (native.shadow_stacks and c.registers.ssp != 0) stack.shadow.ssp = c.registers.ssp;
     c.* = undefined;
 }
 

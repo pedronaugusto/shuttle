@@ -5,4 +5,5 @@ test {
     _ = @import("handoff_test.zig");
     _ = @import("coroutine_test.zig");
     _ = @import("property_test.zig");
+    _ = @import("shadow_test.zig");
 }

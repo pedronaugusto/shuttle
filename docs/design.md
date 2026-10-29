@@ -38,7 +38,7 @@ switched to:
 
 | | Saved by the assembly | Saved by the compiler, as clobbered | Never touched |
 |---|---|---|---|
-| x86_64 System V | rsp, rbp, resume address, MXCSR, x87 control word | rbx, r12–r15 | fs, gs |
+| x86_64 System V | rsp, rbp, resume address, MXCSR, x87 control word; on Linux the shadow stack pointer | rbx, r12–r15 | fs, gs |
 | x86_64 Windows | as System V | rbx, rdi, rsi, r12–r15, xmm6–xmm15 | gs |
 | aarch64 (Linux, Apple, Windows) | sp, x29, x30, resume address, FPCR | x19–x28, d8–d15 | x18 where it is the platform register (Apple, Windows) |
 | riscv64 | sp, s0, ra, resume address, fcsr (with F) | s1–s11, fs0–fs11 | gp, tp |
@@ -79,6 +79,37 @@ Windows, whose unwinder reads no table there, it jumps in with a zero return
 address. Either way debuggers, std's unwinder and `trace.walk` end there; the
 zeroed bytes keep an unwinder that reads past the outermost frame inside the
 stack.
+
+### Shadow stacks, landing pads and signed returns
+
+Where a switch jumps, to the resume address or a new context's trampoline,
+the target is a landing pad: `endbr64` on x86_64 (CET indirect branch
+tracking), `bti j` on aarch64 (branch target identification). Both are
+no-ops where the feature is off. Return addresses signed with pointer
+authentication (`pac-ret`) need nothing more: each context's code signs and
+checks against its own stack pointer, which the switch keeps. A walk strips
+the code from the addresses it reads (XPACLRI).
+
+A CET shadow stack holds a copy of every return address, and a return
+whose address differs faults. On Linux x86_64 a thread has one when the
+program asks (`arch_prctl`, as glibc does for a program built for it); a
+context then needs its own, or its calls would go on the thread's. A stack
+made on such a thread gets one as large as its usable bytes
+(`map_shadow_stack`, a restore token in its top word), and a pool keeps
+each of its stacks' for the pool's life. The switch saves the shadow stack
+pointer of the context it leaves (RDSSP, a no-op without a shadow stack,
+leaves zero) and, when the next context has one, takes its restore token
+(RSTORSSP), leaving one on the shadow stack it left (SAVEPREVSSP), just
+below the pointer it saved. A finished context's token is wherever it last
+switched away, a few calls deep; the next context on the stack starts
+there, and its trampoline pops the entries above (INCSSP) so that it
+starts at the end, as a fresh one does. Without that a stack used again
+and again would run out of shadow stack.
+
+None of this is on Windows, which switches a thread's shadow stack only
+for its fibers, nor with Zig's own x86_64 backend, which encodes none of
+these instructions (Debug builds take `-fllvm`). arm64's Guarded Control
+Stack is not done.
 
 ## Stacks
 
@@ -207,3 +238,5 @@ thread after another. What that asks of the code:
 - aarch64 Linux and aarch64 Windows compile in CI and are not run there:
   preflight's runners are x86_64 Linux and Windows and arm64 macOS.
 - riscv64 is compiled only.
+- Shadow stacks are tested where the processor and kernel have them (the
+  test turns one on for a thread); the Mac has neither.

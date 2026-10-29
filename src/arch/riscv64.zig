@@ -190,7 +190,7 @@ pub const first_frame = 16;
 /// `top` (16-aligned): [sp] the argument, [sp + 8] the entry; s0 and ra zero.
 /// The trampoline calls the entry, and its unwind table says nothing called
 /// it.
-pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
+pub fn initial(top: usize, entry: usize, arg: usize, pc: usize, _: Shadow) Registers {
     const sp = top - first_frame;
     // aegis: internal: inside the stack, below its top
     const slots: [*]usize = @ptrFromInt(sp);
@@ -220,3 +220,18 @@ pub const record_return = -8;
 pub fn returnAddress(saved: usize) usize {
     return saved;
 }
+
+/// No shadow stacks here: a context's calls are checked by nothing but
+/// its own stack.
+pub const shadow_stacks = false;
+pub const Shadow = struct {};
+
+pub fn shadowStackPointer() usize {
+    return 0;
+}
+
+pub fn shadowFor(_: usize) error{SystemResources}!Shadow {
+    return .{};
+}
+
+pub fn releaseShadow(_: Shadow, _: usize) void {}

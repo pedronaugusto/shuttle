@@ -227,8 +227,14 @@ its `try` unwinds it through its defers.
 - No unwinding past a panic: Zig has none. A canceled coroutine unwinds
   through the errors its `yield` returns.
 - No AddressSanitizer annotations: Zig has no AddressSanitizer.
-- No shadow stacks (x86 CET) and no pointer authentication or branch target
-  identification (arm64e, BTI): a switch jumps where those would refuse it.
+- CET shadow stacks on Linux x86_64 with the LLVM backend: a stack made on a
+  thread that has one gets its own. Not on Windows, which switches a
+  thread's shadow stack only for its fibers, nor with Zig's own x86_64
+  backend, which encodes none of the instructions. No arm64 Guarded Control
+  Stack.
+- Landing pads where a switch jumps (`endbr64`, `bti j`) and return-address
+  signing (`pac-ret`) work as they are; not arm64e, whose pointers in memory
+  are signed.
 - No 32-bit targets.
 - shuttle's contexts are not Win32 fibers: fiber local storage and
   `GetCurrentFiber` belong to the thread.

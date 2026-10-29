@@ -19,6 +19,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const aegis = @import("aegis");
 const memory = @import("memory.zig");
+const native = @import("arch.zig").native;
 
 pub const Bytes = aegis.units.Bytes(usize);
 
@@ -39,6 +40,9 @@ limit: usize,
 valgrind: usize = 0,
 /// Which pool slot the stack is, or none for a stack made by `init`.
 slot: ?Slot = null,
+/// Linux x86_64: the stack's shadow stack, made with it on a thread that
+/// has one (`native.shadowFor`); none elsewhere.
+shadow: native.Shadow = .{},
 
 /// A pool's stack: its size class and its place there.
 pub const Slot = struct { class: u16, index: u32 };
@@ -73,6 +77,7 @@ pub fn init(options: Options) InitError!Stack {
         .limit = base + layout.guard,
     };
     try s.prepare(layout.commit, .reserved);
+    s.shadow = try native.shadowFor(layout.usable);
     s.register();
     return s;
 }
@@ -81,6 +86,7 @@ pub fn init(options: Options) InitError!Stack {
 pub fn deinit(s: *Stack) void {
     std.debug.assert(s.slot == null); // a pool's stack goes back with Pool.give
     s.unregister();
+    native.releaseShadow(s.shadow, s.end - s.bottom);
     memory.release(memory.pages(s.base, s.end));
     s.* = undefined;
 }

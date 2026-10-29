@@ -16,6 +16,9 @@
 //! trampoline, an `endbr64` marks the target as one an indirect jump may
 //! reach: CET's indirect branch tracking refuses any other. It is a no-op
 //! on a processor without CET, or with tracking off.
+//!
+//! On Linux a context runs on a CET shadow stack of its own where the
+//! thread has one (`shadow_stacks`).
 const builtin = @import("builtin");
 const std = @import("std");
 const teb = @import("../teb.zig");
@@ -37,7 +40,64 @@ pub const Registers = extern struct {
     fp: usize,
     pc: usize,
     control: Control,
+    /// Linux: the shadow stack pointer, zero where the thread has no shadow
+    /// stack.
+    ssp: usize,
 };
+
+/// Whether contexts run on shadow stacks of their own where the thread has
+/// one: on Linux, whose threads have one when the program asks
+/// (`arch_prctl`), as glibc does for a program built for them. A call
+/// pushes its return address there too, and a return whose address differs
+/// faults, so each context's calls need their own: a stack made on such a
+/// thread gets one (`Shadow`). The switch saves the shadow stack pointer
+/// of the context it leaves, which leaves a restore token on that shadow
+/// stack, and restores the next one's from its token (RSTORSSP,
+/// SAVEPREVSSP). Elsewhere a thread's shadow stack, where there is one, is
+/// the system's to switch (Windows switches it only for its fibers), and
+/// shuttle's contexts cannot run with one. Zig's own x86_64 backend, which
+/// builds Debug by default, encodes none of these instructions: there they
+/// take the LLVM backend (`-fllvm`, or any release mode).
+pub const shadow_stacks = builtin.os.tag == .linux and builtin.zig_backend == .stage2_llvm;
+
+/// A stack's shadow stack: one past its highest byte, and the shadow stack
+/// pointer the next context made on the stack starts at, which has a
+/// restore token just below it. Zero for none.
+pub const Shadow = if (shadow_stacks) struct { end: usize = 0, ssp: usize = 0 } else struct {};
+
+/// A shadow stack for a stack of `usable` bytes (whole pages) when the
+/// running thread has one, else none: as large as the stack, which no chain
+/// of calls on it outgrows, committed only as calls reach it, and with a
+/// restore token in its top word for a switch to take (`map_shadow_stack`,
+/// Linux 6.6 and later). It is one more mapping.
+pub fn shadowFor(usable: usize) error{SystemResources}!Shadow {
+    if (!shadow_stacks or shadowStackPointer() == 0) return .{};
+    const linux = std.os.linux;
+    // include/uapi/asm-generic/mman-common.h
+    const shadow_stack_set_token = 1 << 0;
+    const rc = linux.syscall3(.map_shadow_stack, 0, usable, shadow_stack_set_token);
+    if (linux.errno(rc) != .SUCCESS) return error.SystemResources;
+    return .{ .end = rc + usable, .ssp = rc + usable };
+}
+
+/// Releases a shadow stack `shadowFor` made for a stack of `usable` bytes.
+pub fn releaseShadow(shadow: Shadow, usable: usize) void {
+    if (!shadow_stacks or shadow.end == 0) return;
+    // Unmapping a whole mapping this process made cannot fail.
+    // aegis: boundary: munmap takes back the mapping map_shadow_stack returned as a number
+    _ = std.os.linux.munmap(@ptrFromInt(shadow.end - usable), usable);
+}
+
+/// The running thread's shadow stack pointer, or zero when it has no shadow
+/// stack: RDSSP is then a no-op, and leaves the zero.
+pub fn shadowStackPointer() usize {
+    if (!shadow_stacks) return 0;
+    // aegis: boundary: reads the shadow stack pointer, which only the processor holds
+    return asm volatile ("rdsspq %[ssp]"
+        : [ssp] "=r" (-> usize),
+        : [zero] "0" (@as(usize, 0)),
+    );
+}
 
 /// What a switch hands from one side to the other: where to save, what to
 /// load, and the message; on Windows also the stack bounds it exchanges.
@@ -54,7 +114,7 @@ pub const Transfer = if (is_windows) extern struct {
 };
 
 comptime {
-    if (@offsetOf(Registers, "control") != 24 or @offsetOf(Transfer, "message") != 16) @compileError("the switch reads these offsets");
+    if (@offsetOf(Registers, "control") != 24 or @offsetOf(Registers, "ssp") != 32 or @offsetOf(Transfer, "message") != 16) @compileError("the switch reads these offsets");
     if (is_windows and @offsetOf(Transfer, "bounds") != 24) @compileError("the switch reads these offsets");
 }
 
@@ -91,8 +151,10 @@ pub inline fn swap(t: *const Transfer) *const Transfer {
 /// The transfer is in `sent`; rax and rcx hold the two register sets, r8
 /// the resume address. MXCSR and the x87 control word are written only when
 /// the context switched to keeps different ones: loading them costs more
-/// than the comparison. On Windows the stack bounds are exchanged last,
-/// just before the stack pointer moves (`teb`). The register is spelt out,
+/// than the comparison. On Linux the shadow stack pointer is saved, and the
+/// next context's restored when it has one (`shadow_switch`). On Windows
+/// the stack bounds are exchanged last, just before the stack pointer moves
+/// (`teb`). The register is spelt out,
 /// not an operand, because Zig's own x86_64 backend reads no operand inside
 /// a memory reference.
 fn body(comptime sent: []const u8) []const u8 {
@@ -111,7 +173,7 @@ fn body(comptime sent: []const u8) []const u8 {
         \\ fldcw 28(%%rcx)
         \\ 1:
         \\
-    ++ (if (is_windows) exchange(sent) else "") ++
+    ++ (if (shadow_stacks) shadow_switch else "") ++ (if (is_windows) exchange(sent) else "") ++
         \\ movq 0(%%rcx), %%rsp
         \\ movq 8(%%rcx), %%rbp
         \\ jmpq *16(%%rcx)
@@ -119,6 +181,22 @@ fn body(comptime sent: []const u8) []const u8 {
         \\ endbr64
     ;
 }
+
+/// Linux: the shadow stack pointer saved into `from` (zero without a shadow
+/// stack), and when `to` has one, its restore token taken: SAVEPREVSSP
+/// then leaves one on the shadow stack left, just below the pointer saved.
+const shadow_switch =
+    \\ xorl %%r9d, %%r9d
+    \\ rdsspq %%r9
+    \\ movq %%r9, 32(%%rax)
+    \\ movq 32(%%rcx), %%r9
+    \\ testq %%r9, %%r9
+    \\ jz 2f
+    \\ rstorssp -8(%%r9)
+    \\ saveprevssp
+    \\ 2:
+    \\
+;
 
 /// Windows: the thread information block's stack fields saved into the
 /// transfer's `bounds.save` and loaded from its `bounds.load`, in r9 to r11.
@@ -259,13 +337,18 @@ pub const first_frame = 48;
 /// The registers that start `entry(arg, message)` on a stack whose first
 /// frame goes below `top` (16-aligned), and that frame.
 ///
+/// On `shadow`, the stack's shadow stack, where it has one, the context
+/// starts at the restore token below its pointer.
+///
 /// Outside Windows the trampoline calls the entry, so the trampoline is the
-/// outermost frame and its unwind table says nothing called it. On Windows,
-/// whose unwinder reads no such table here, it jumps in with a zero return
-/// address, which ends a walk; rsp is then 8 mod 16 as after a call, with
-/// the 32 bytes of home space above the return address the callee may write.
-pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
-    const sp = if (is_windows) top - first_frame + 8 else top - 16;
+/// outermost frame and its unwind table says nothing called it; the frame
+/// is the argument, the entry and the end of the shadow stack (zero for
+/// none). On Windows, whose unwinder reads no such table here, it jumps in
+/// with a zero return address, which ends a walk; rsp is then 8 mod 16 as
+/// after a call, with the 32 bytes of home space above the return address
+/// the callee may write.
+pub fn initial(top: usize, entry: usize, arg: usize, pc: usize, shadow: Shadow) Registers {
+    const sp = if (is_windows) top - first_frame + 8 else top - 32;
     // aegis: internal: inside the stack, below its top
     const slots: [*]usize = @ptrFromInt(sp);
     if (is_windows) {
@@ -275,9 +358,35 @@ pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
     } else {
         slots[0] = arg;
         slots[1] = entry;
+        slots[2] = if (shadow_stacks) shadow.end else 0;
     }
-    return .{ .sp = sp, .fp = 0, .pc = pc, .control = control() };
+    return .{ .sp = sp, .fp = 0, .pc = pc, .control = control(), .ssp = if (shadow_stacks) shadow.ssp else 0 };
 }
+
+/// Linux: on a shadow stack a context ran on before, the restore token the
+/// new context took lies where that one last switched away, below the end.
+/// The entries above it are popped (INCSSP, at most 255 at a time), so each
+/// context's shadow stack starts at its end, and a stack reused again and
+/// again never runs out of it. The end is the first frame's third word,
+/// zero for none; rax and rcx are free, rsi holds the transfer.
+const shadow_start =
+    \\ movq 16(%%rsp), %%rax
+    \\ testq %%rax, %%rax
+    \\ jz 2f
+    \\ rdsspq %%rcx
+    \\ subq %%rcx, %%rax
+    \\ shrq $3, %%rax
+    \\ jz 2f
+    \\ 1:
+    \\ movl $255, %%ecx
+    \\ cmpq %%rcx, %%rax
+    \\ cmovbq %%rax, %%rcx
+    \\ incsspq %%rcx
+    \\ subq %%rcx, %%rax
+    \\ jnz 1b
+    \\ 2:
+    \\
+;
 
 /// The first instructions of a context.
 pub fn trampoline() callconv(.naked) noreturn {
@@ -291,6 +400,8 @@ pub fn trampoline() callconv(.naked) noreturn {
     ) else asm volatile (
         \\ .cfi_undefined %%rip
         \\ endbr64
+        \\
+    ++ (if (shadow_stacks) shadow_start else "") ++
         \\ movq 0(%%rsp), %%rdi
         \\ movq 16(%%rsi), %%rsi
         \\ callq *8(%%rsp)

@@ -40,6 +40,7 @@ const std = @import("std");
 const aegis = @import("aegis");
 const memory = @import("memory.zig");
 const Stack = @import("Stack.zig");
+const native = @import("arch.zig").native;
 
 const Bytes = Stack.Bytes;
 const is_windows = builtin.os.tag == .windows;
@@ -107,6 +108,10 @@ const Shelf = struct {
     /// Windows: per stack, its lowest committed byte. Only the stack's
     /// holder touches its entry, and only stacks below `fresh` have one.
     limits: if (is_windows) []usize else void,
+    /// Linux x86_64, when the thread making the pool has a shadow stack:
+    /// per stack, its shadow stack (`native.shadowFor`), made with it and kept
+    /// for the pool's life. Only the stack's holder touches its entry.
+    shadows: if (native.shadow_stacks) []native.Shadow else void,
     /// Under Valgrind, each stack's registration, made when it is first
     /// made usable and kept for the pool's life; empty elsewhere.
     valgrind: []usize,
@@ -117,12 +122,18 @@ const Shelf = struct {
         errdefer gpa.free(links);
         const limits = if (is_windows) try gpa.alloc(usize, class.count) else {};
         errdefer if (is_windows) gpa.free(limits);
+        var shadows: if (native.shadow_stacks) []native.Shadow else void = if (native.shadow_stacks) &.{} else {};
+        if (native.shadow_stacks and native.shadowStackPointer() != 0) {
+            shadows = try gpa.alloc(native.Shadow, class.count);
+            @memset(shadows, .{});
+        }
+        errdefer if (native.shadow_stacks) gpa.free(shadows);
         var valgrind: []usize = &.{};
         if (std.valgrind.runningOnValgrind() > 0) {
             valgrind = try gpa.alloc(usize, class.count);
             @memset(valgrind, 0);
         }
-        return .{ .layout = layout, .count = class.count, .links = links, .limits = limits, .valgrind = valgrind };
+        return .{ .layout = layout, .count = class.count, .links = links, .limits = limits, .shadows = shadows, .valgrind = valgrind };
     }
 
     fn deinit(s: *Shelf, gpa: std.mem.Allocator) void {
@@ -130,6 +141,10 @@ const Shelf = struct {
         if (s.valgrind.len > 0) gpa.free(s.valgrind);
         gpa.free(s.links);
         if (is_windows) gpa.free(s.limits);
+        if (native.shadow_stacks) {
+            for (s.shadows) |shadow| native.releaseShadow(shadow, s.layout.usable);
+            gpa.free(s.shadows);
+        }
     }
 
     /// The bytes of all the class's stacks.
@@ -147,6 +162,7 @@ const Shelf = struct {
             .end = base + s.layout.reserved,
             .limit = if (is_windows) s.limits[index] else bottom,
             .slot = .{ .class = class, .index = index },
+            .shadow = if (native.shadow_stacks and s.shadows.len > 0) s.shadows[index] else .{},
         };
     }
 
@@ -243,7 +259,7 @@ pub fn init(gpa: std.mem.Allocator, options: Options) InitError!Pool {
         bytes = std.math.add(usize, bytes, try s.span()) catch return error.Overflow;
     }
     const guard: Stack.Guard = if (memory.guardRegions()) .region else .reserved;
-    try checkMapCount(total, guard);
+    try checkMapCount(total, guard, native.shadow_stacks and native.shadowStackPointer() != 0);
     const reservation: memory.Pages = if (bytes == 0) &.{} else try memory.reserve(bytes);
     var offset: usize = @intFromPtr(reservation.ptr); // safe: an address, to lay the classes out
     for (shelves) |*s| {
@@ -317,6 +333,12 @@ fn make(p: *Pool, class: u16) TakeError!?Stack {
         return error.SystemResources;
     };
     if (is_windows) s.limits[index] = stack.limit;
+    if (native.shadow_stacks and s.shadows.len > 0 and s.shadows[index].end == 0) {
+        s.shadows[index] = native.shadowFor(s.layout.usable) catch {
+            s.unmade.push(s.links, index);
+            return error.SystemResources;
+        };
+    }
     // Valgrind is told of the stack once: a stack handed out is described
     // by its number alone, and carries no registration.
     if (s.valgrind.len > 0) {
@@ -338,6 +360,8 @@ pub fn give(p: *Pool, stack: Stack) void {
     const slot = s.slot.?;
     const shelf = &p.classes[slot.class];
     if (is_windows) shelf.limits[slot.index] = @min(shelf.limits[slot.index], s.limit);
+    // Where the next context on the stack takes its shadow stack's token.
+    if (native.shadow_stacks and shelf.shadows.len > 0) shelf.shadows[slot.index] = s.shadow;
     shelf.free.push(shelf.links, slot.index);
     // Zero publishes the last give after it stopped touching the pool.
     _ = p.in_use.fetchSubWrapping(.fromRaw(1), .release);
@@ -388,12 +412,14 @@ pub fn sizes(p: *const Pool, out: []Bytes) []Bytes {
     return out[0..n];
 }
 
-fn checkMapCount(total: u32, guard: Stack.Guard) error{TooManyStacks}!void {
+fn checkMapCount(total: u32, guard: Stack.Guard, shadows: bool) error{TooManyStacks}!void {
     // Guard regions split nothing: stacks made usable side by side are one
     // mapping. Otherwise each is a mapping of its own beside a no-access
-    // one. Room is left for everything else in the process.
-    if (guard == .region) return;
+    // one. A shadow stack is one more each. Room is left for everything
+    // else in the process.
+    if (guard == .region and !shadows) return;
     const limit = memory.maxMapCount() orelse return;
-    const needed: u64 = 4096 + 1 + 2 * @as(u64, total);
+    const per_stack: u64 = @as(u64, if (guard == .region) 0 else 2) + @intFromBool(shadows);
+    const needed: u64 = 4096 + 1 + per_stack * total;
     if (needed > limit) return error.TooManyStacks;
 }

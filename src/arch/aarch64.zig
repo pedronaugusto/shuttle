@@ -254,7 +254,7 @@ pub const first_frame = 16;
 /// zero. Outside Windows the trampoline calls the entry, and its unwind table
 /// says nothing called it; on Windows it branches in with x30 zero, which
 /// ends a walk there.
-pub fn initial(top: usize, entry: usize, arg: usize, pc: usize) Registers {
+pub fn initial(top: usize, entry: usize, arg: usize, pc: usize, _: Shadow) Registers {
     const sp = top - first_frame;
     // aegis: internal: inside the stack, below its top
     const slots: [*]usize = @ptrFromInt(sp);
@@ -298,3 +298,18 @@ pub fn returnAddress(saved: usize) usize {
         : [saved] "0" (saved),
     );
 }
+
+/// No shadow stacks here: a context's calls are checked by nothing but
+/// its own stack.
+pub const shadow_stacks = false;
+pub const Shadow = struct {};
+
+pub fn shadowStackPointer() usize {
+    return 0;
+}
+
+pub fn shadowFor(_: usize) error{SystemResources}!Shadow {
+    return .{};
+}
+
+pub fn releaseShadow(_: Shadow, _: usize) void {}
