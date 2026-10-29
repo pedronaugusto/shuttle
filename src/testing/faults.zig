@@ -37,6 +37,7 @@ const fatal = [_]Case{
     .{ .name = "nested", .run = nestedUncaught, .says = &.{ "shuttle: a coroutine panicked: deep", "the coroutine that ran it panicked with it:", "the code that ran it panicked with it:" } },
     .{ .name = "overflow-coroutine", .run = overflowCoroutine, .says = &.{"shuttle: stack overflow in a coroutine"} },
     .{ .name = "overflow-context", .run = overflowContext, .says = &.{"shuttle: stack overflow"} },
+    .{ .name = "overflow-pooled", .run = overflowPooled, .says = &.{"shuttle: stack overflow in a coroutine"} },
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -214,6 +215,16 @@ fn overflowing(y: *Gen.Yielder, depth: u64) error{Canceled}!void {
 
 fn overflowCoroutine() void {
     var g = Gen.init(newStack(), overflowing, .{@as(u64, 1 << 20)}) catch @panic("no stack");
+    _ = g.next() catch unreachable; // unreachable: the body fails only when canceled
+}
+
+/// On a pool's stack with a neighbour below: on Linux 6.13 and later the
+/// guard between them is a guard region inside one mapping.
+fn overflowPooled() void {
+    var pool = shuttle.Pool.init(std.heap.page_allocator, .{ .classes = &.{.{ .size = .fromRaw(64 * 1024), .count = 2 }} }) catch @panic("no pool");
+    _ = (pool.take(.fromRaw(64 * 1024)) catch @panic("no stack")) orelse @panic("no stack");
+    const upper = (pool.take(.fromRaw(64 * 1024)) catch @panic("no stack")) orelse @panic("no stack");
+    var g = Gen.init(upper, overflowing, .{@as(u64, 1 << 20)}) catch @panic("no stack");
     _ = g.next() catch unreachable; // unreachable: the body fails only when canceled
 }
 

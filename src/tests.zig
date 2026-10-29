@@ -6,4 +6,5 @@ test {
     _ = @import("coroutine_test.zig");
     _ = @import("property_test.zig");
     _ = @import("shadow_test.zig");
+    _ = @import("guard_test.zig");
 }

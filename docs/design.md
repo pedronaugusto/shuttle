@@ -118,7 +118,10 @@ usable bytes. It is reserved so that any access faults, and made usable by
 `Stack.prepare`. Elsewhere than Windows the usable bytes are made readable and
 writable and the system commits each page as it is touched; the guard is the
 reservation's own no-access pages, or, where Linux has guard regions (6.13 and
-later), a guard region in committed memory, which splits no mapping. On Linux
+later), a guard region in committed memory, which splits no mapping. A test
+requires them on every kernel from 6.13 and checks a pool's neighbours are one
+mapping, and a fault case overflows into one; the hosted Linux runners
+(Ubuntu 26.04) run both. On Linux
 the reservation is marked as a stack (no transparent huge pages, 6.7 and later)
 and charged no swap; OpenBSD, which refuses a stack pointer into memory not
 mapped as a stack and maps a stack only read-write, maps the usable bytes again
