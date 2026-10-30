@@ -21,6 +21,9 @@ const arch_shstk_shstk = 1 << 0;
 
 const Run = struct {
     outcome: enum { pending, unsupported, failed, passed } = .pending,
+    /// What failed, for the test to say: the shadow stack pointer read
+    /// after turning it on, or the error the contexts' run returned.
+    failure: union(enum) { none, no_pointer, err: anyerror } = .none,
     /// What the contexts counted, checked against what they were asked.
     calls: u64 = 0,
     rounds: u32 = 0,
@@ -105,9 +108,11 @@ fn shadowThread(run: *Run) noreturn {
         run.outcome = .unsupported;
     } else if (native.shadowStackPointer() == 0) {
         run.outcome = .failed;
+        run.failure = .no_pointer;
     } else {
-        exercise(run) catch {
+        exercise(run) catch |err| {
             run.outcome = .failed;
+            run.failure = .{ .err = err };
         };
         if (run.outcome == .pending) run.outcome = .passed;
     }
@@ -126,7 +131,14 @@ test "contexts run under CET shadow stacks, each on its stack's own, reused with
     thread.join();
     switch (run.outcome) {
         .unsupported => return error.SkipZigTest,
-        .pending, .failed => return error.TestUnexpectedResult,
+        .pending, .failed => {
+            switch (run.failure) {
+                .none => std.debug.print("shadow stacks: the thread ended without an outcome\n", .{}),
+                .no_pointer => std.debug.print("shadow stacks: on, but RDSSP read zero\n", .{}),
+                .err => |err| std.debug.print("shadow stacks: the contexts' run failed: {t} (after {d} rounds)\n", .{ err, run.rounds }),
+            }
+            return error.TestUnexpectedResult;
+        },
         .passed => {},
     }
     const tasks = 2 * uses_per_stack;
