@@ -48,7 +48,9 @@ const Task = struct {
     }
 
     /// The last switch away, `calls` calls deep: the next context on the
-    /// stack takes the token it leaves there.
+    /// stack takes the token it leaves there. Nothing switches back, so the
+    /// count after each call never runs; it keeps the call from being a tail
+    /// call, a frame on both stacks.
     noinline fn leaveFrom(task: *Task, calls: u32) void {
         if (calls == 0) {
             _ = Context.switchTo(&task.self, task.driver, Context.Nothing, null);
@@ -145,5 +147,5 @@ test "contexts run under CET shadow stacks, each on its stack's own, reused with
     try std.testing.expectEqual(tasks * rounds_per_task, run.rounds);
     var calls: u64 = 0;
     for (0..rounds_per_task) |i| calls += i % 24;
-    try std.testing.expectEqual(tasks * (calls + 3), run.calls);
+    try std.testing.expectEqual(tasks * calls, run.calls);
 }
