@@ -17,7 +17,19 @@ const linux = std.os.linux;
 
 // arch/x86/include/uapi/asm/prctl.h
 const arch_shstk_enable = 0x5001;
+const arch_shstk_disable = 0x5002;
 const arch_shstk_shstk = 1 << 0;
+
+/// The system call itself, inline: a call made before the shadow stack is
+/// on has no entry there to return through.
+inline fn shadowStack(code: usize) usize {
+    return asm volatile ("syscall"
+        : [ret] "={rax}" (-> usize),
+        : [number] "{rax}" (@backingInt(linux.SYS.arch_prctl)),
+          [code] "{rdi}" (code),
+          [features] "{rsi}" (@as(usize, arch_shstk_shstk)),
+        : .{ .rcx = true, .r11 = true, .memory = true });
+}
 
 const Run = struct {
     outcome: enum { pending, unsupported, failed, passed } = .pending,
@@ -96,19 +108,15 @@ fn exercise(run: *Run) !void {
 }
 
 /// The thread's whole life. Its shadow stack starts empty when it is turned
-/// on, so neither the call that turns it on nor this function may return:
-/// the call is the system call itself, inline, and the thread ends with
-/// another.
-fn shadowThread(run: *Run) noreturn {
-    const rc = asm volatile ("syscall"
-        : [ret] "={rax}" (-> usize),
-        : [number] "{rax}" (@backingInt(linux.SYS.arch_prctl)),
-          [code] "{rdi}" (@as(usize, arch_shstk_enable)),
-          [features] "{rsi}" (@as(usize, arch_shstk_shstk)),
-        : .{ .rcx = true, .r11 = true, .memory = true });
-    if (linux.errno(rc) != .SUCCESS) {
+/// on, so this function returns only once it is off again: the thread ends
+/// as any other, through its runtime's exit (a thread that skips it is one
+/// TSan's join waits on forever).
+fn shadowThread(run: *Run) void {
+    if (linux.errno(shadowStack(arch_shstk_enable)) != .SUCCESS) {
         run.outcome = .unsupported;
-    } else if (native.shadowStackPointer() == 0) {
+        return;
+    }
+    if (native.shadowStackPointer() == 0) {
         run.outcome = .failed;
         run.failure = .no_pointer;
     } else {
@@ -118,12 +126,8 @@ fn shadowThread(run: *Run) noreturn {
         };
         if (run.outcome == .pending) run.outcome = .passed;
     }
-    asm volatile ("syscall"
-        :
-        : [number] "{rax}" (@backingInt(linux.SYS.exit)),
-          [status] "{rdi}" (@as(usize, 0)),
-        : .{ .rcx = true, .r11 = true, .memory = true });
-    unreachable; // unreachable: the thread has ended
+    const off = linux.errno(shadowStack(arch_shstk_disable));
+    if (off != .SUCCESS) std.debug.panic("shadow stacks: on, and not turned off: {t}", .{off});
 }
 
 test "contexts run under CET shadow stacks, each on its stack's own, reused without running out" {
