@@ -98,7 +98,7 @@ pub fn handleSegfault(address: ?usize, name: []const u8, context: ?std.debug.Cpu
 /// The overflowed stack's frames, from where it faulted to its first.
 fn traceOverflowed(low: usize, high: usize, context: ?std.debug.CpuContextPtr) void {
     const ctx = context orelse return;
-    var addresses: [33]usize = undefined;
+    var addresses: [33]usize = @splat(0);
     var n: usize = 0;
     if (register(ctx, pc_register)) |pc| {
         // Printed as a return address is, one byte back: inside the faulting instruction's function still.

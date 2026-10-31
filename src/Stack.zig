@@ -103,16 +103,16 @@ pub const Layout = struct {
         const page = memory.pageSize();
         // Windows keeps a guard page inside the usable bytes, below what is committed.
         const least = if (is_windows) 2 * page else page;
-        const usable_bytes = try roundPages(@max(options.size.raw(), least), page);
-        const guard_bytes = try roundPages(@max(if (options.guard) |g| g.raw() else page, page), page);
-        const commit = @min(usable_bytes - page, try roundPages(if (options.commit) |c| c.raw() else 2 * page, page));
+        const usable_bytes = @max(try roundPages(options.size, page), least);
+        const guard_bytes = @max(try roundPages(options.guard orelse .fromRaw(page), page), page);
+        const commit = @min(usable_bytes - page, try roundPages(options.commit orelse .fromRaw(2 * page), page));
         const reserved = (Bytes.fromRaw(usable_bytes).add(.fromRaw(guard_bytes)) catch return error.Overflow).raw();
         return .{ .guard = guard_bytes, .usable = usable_bytes, .commit = @max(commit, page), .reserved = reserved };
     }
 };
 
-fn roundPages(bytes: usize, page: usize) error{Overflow}!usize {
-    const up = (aegis.int.Checked(usize).init(bytes).add(page - 1) catch return error.Overflow).raw();
+fn roundPages(bytes: Bytes, page: usize) error{Overflow}!usize {
+    const up = (aegis.int.Checked(usize).init(bytes.raw()).add(page - 1) catch return error.Overflow).raw();
     return std.mem.alignBackward(usize, up, page);
 }
 

@@ -128,7 +128,7 @@ pub fn maxMapCount() ?u64 {
     if (linux.errno(rc) != .SUCCESS) return null;
     const fd: linux.fd_t = @intCast(rc);
     defer _ = linux.close(fd);
-    var buffer: [32]u8 = undefined;
+    var buffer: [32]u8 = @splat(0);
     const n = linux.read(fd, &buffer, buffer.len);
     if (linux.errno(n) != .SUCCESS) return null;
     return std.fmt.parseInt(u64, std.mem.trim(u8, buffer[0..n], " \n"), 10) catch null;

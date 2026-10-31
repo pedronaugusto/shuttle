@@ -92,7 +92,7 @@ fn describeOne(p: *const Panic) void {
     w.writeAll("coroutine stack trace:\n") catch return;
     // std's trace takes its addresses as a mutable slice, which writing one
     // only reads: a copy of them, here on the way out.
-    var addresses: @TypeOf(p.trace_addresses) = undefined;
+    var addresses: @TypeOf(p.trace_addresses) = @splat(0);
     const kept = p.returnAddresses();
     @memcpy(addresses[0..kept.len], kept);
     std.debug.writeStackTrace(&.{ .return_addresses = addresses[0..kept.len], .skipped = .none }, stderr) catch return;

@@ -68,10 +68,10 @@ pub fn lowestWritable(s: Stack) usize {
 }
 
 fn classOf(s: Stack) usize {
-    const size = s.size().raw();
+    const size = s.size();
     return for (sizes, 0..) |each, class| {
-        if (size == each) break class;
-    } else size; // a size no class has: the model's checks fail on it
+        if (size.eql(.fromRaw(each))) break class;
+    } else size.raw(); // a size no class has: the model's checks fail on it
 }
 
 test "a pool hands out the smallest class that fits and has a stack free, and nothing overlaps" {
