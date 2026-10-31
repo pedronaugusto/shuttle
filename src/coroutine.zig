@@ -101,6 +101,7 @@ pub fn current() ?*Core {
 pub fn running() ?*Core {
     const inside = Context.runningInside() orelse return null;
     // Only a coroutine's own context names anything, and it names itself.
+    // aegis: internal: `inside` is set only by a coroutine's start, to its own context, and a switch only moves what contexts hold
     const c: *Core = @alignCast(@fieldParentPtr("context", inside));
     return if (c.state() == .running) c else null;
 }

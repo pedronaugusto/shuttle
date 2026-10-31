@@ -376,6 +376,7 @@ pub fn inUse(p: *const Pool) u32 {
 /// space. At most `count()`.
 pub fn reached(p: *const Pool) u32 {
     var n: u32 = 0;
+    // aegis: no-danger: a class's `fresh` stays below its count (`claim`), and `init` summed the counts in a u32 with a check
     for (p.classes) |*s| n += s.fresh.load(.monotonic).raw();
     return n;
 }
