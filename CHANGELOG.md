@@ -11,6 +11,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Contexts run under CET shadow stacks on Linux x86_64 (with the LLVM backend): a stack made on a thread that has a shadow stack gets one of its own (`Stack.shadow`; a pool keeps each of its stacks' for the pool's life), the switch saves the shadow stack pointer of the context it leaves and takes the restore token of the one it resumes, and a new context on a reused stack starts its shadow stack at the end again. A context made on such a thread on a stack without one panics, where its returns would fault far from it.
 - The resume address and a new context's trampoline are landing pads (`endbr64` on x86_64, `bti j` on aarch64), for indirect branch tracking and branch target identification; both are no-ops where those are off.
 
+### Changed
+
+- Pins aegis breaking-0.3 (a34e694), the 0.3.0 line the family is on, where it pinned aegis 0.2.3, and shakedown main (4979fa9) for the tests. shuttle builds on it unchanged.
+
 ### Fixed
 
 - A trace of code built with return-address signing (`-mbranch-protection=pac-ret`) on aarch64 reported signed addresses: a walk strips the pointer authentication code (XPACLRI, a no-op without it).
