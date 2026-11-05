@@ -271,7 +271,7 @@ pub fn init(gpa: std.mem.Allocator, options: Options) InitError!Pool {
 
 /// Releases every stack. None may be in use.
 pub fn deinit(p: *Pool, gpa: std.mem.Allocator) void {
-    std.debug.assert(p.inUse() == 0);
+    aegis.assert.invariant(p.inUse() == 0, "p.inUse() == 0");
     for (p.classes) |*s| s.deinit(gpa);
     gpa.free(p.classes);
     if (p.reservation.len > 0) memory.release(p.reservation);
@@ -376,7 +376,7 @@ pub fn inUse(p: *const Pool) u32 {
 /// space. At most `count()`.
 pub fn reached(p: *const Pool) u32 {
     var n: u32 = 0;
-    // aegis: no-danger: a class's `fresh` stays below its count (`claim`), and `init` summed the counts in a u32 with a check
+    // aegis: no-danger(A004, A010): a class's `fresh` stays below its count (`claim`), and `init` summed the counts in a u32 with a check
     for (p.classes) |*s| n += s.fresh.load(.monotonic).raw();
     return n;
 }
@@ -384,7 +384,7 @@ pub fn reached(p: *const Pool) u32 {
 /// How many stacks the pool holds, all classes together.
 pub fn count(p: *const Pool) u32 {
     if (p.classes.len == 0) return 0;
-    const last = p.classes[p.classes.len - 1];
+    const last = &p.classes[p.classes.len - 1];
     return last.first + last.count;
 }
 

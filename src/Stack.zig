@@ -84,7 +84,7 @@ pub fn init(options: Options) InitError!Stack {
 
 /// Releases a stack made by `init`. Nothing may run on it.
 pub fn deinit(s: *Stack) void {
-    std.debug.assert(s.slot == null); // a pool's stack goes back with Pool.give
+    aegis.assert.invariant(s.slot == null, "s.slot == null"); // a pool's stack goes back with Pool.give
     s.unregister();
     native.releaseShadow(s.shadow, s.end - s.bottom);
     memory.release(memory.pages(s.base, s.end));
@@ -143,10 +143,10 @@ pub fn prepare(s: *Stack, commit: usize, guard: Guard) error{SystemResources}!vo
         s.limit = s.bottom;
         return;
     }
-    std.debug.assert(guard == .reserved);
+    aegis.assert.invariant(guard == .reserved, "guard == .reserved");
     const page = memory.pageSize();
     const low = s.end - commit;
-    std.debug.assert(low - page >= s.bottom);
+    aegis.assert.invariant(low - page >= s.bottom, "low - page >= s.bottom");
     try memory.commit(memory.pages(low, s.end), false);
     try memory.commit(memory.pages(low - page, low), true);
     s.limit = low;
@@ -173,7 +173,7 @@ pub fn reach(s: *Stack, low: usize) error{StackTooSmall}!void {
 /// what is left to run on.
 pub fn carve(s: *Stack, comptime T: type) error{StackTooSmall}!*T {
     const bytes = try s.carveBytes(@sizeOf(T), .of(T));
-    // aegis: internal: `carveBytes` gave room for a `T` at an address aligned for one
+    // aegis: internal(A019): `carveBytes` gave room for a `T` at an address aligned for one
     return @ptrCast(@alignCast(bytes));
 }
 
@@ -187,7 +187,7 @@ pub fn carveBytes(s: *Stack, len: usize, alignment: std.mem.Alignment) error{Sta
     if (at < s.bottom) return error.StackTooSmall;
     try s.reach(at);
     s.top = at;
-    // aegis: internal: an address inside the stack's usable bytes, committed by `reach`, aligned as asked and with `len` bytes just above
+    // aegis: internal(A019): an address inside the stack's usable bytes, committed by `reach`, aligned as asked and with `len` bytes just above
     return @ptrFromInt(at);
 }
 
@@ -201,7 +201,7 @@ pub fn size(s: *const Stack) Bytes {
 /// went). On Windows only the bytes from `limit` up are committed: `reach`
 /// the lowest byte touched first.
 pub fn usable(s: *const Stack) []u8 {
-    // aegis: internal: the stack's usable bytes, which its reservation holds from `bottom` to `end`
+    // aegis: internal(A019): the stack's usable bytes, which its reservation holds from `bottom` to `end`
     const low: [*]u8 = @ptrFromInt(s.bottom);
     return low[0 .. s.end - s.bottom];
 }

@@ -101,7 +101,7 @@ pub fn current() ?*Core {
 pub fn running() ?*Core {
     const inside = Context.runningInside() orelse return null;
     // Only a coroutine's own context names anything, and it names itself.
-    // aegis: internal: `inside` is set only by a coroutine's start, to its own context, and a switch only moves what contexts hold
+    // aegis: internal(A019): `inside` is set only by a coroutine's start, to its own context, and a switch only moves what contexts hold
     const c: *Core = @alignCast(@fieldParentPtr("context", inside));
     return if (c.state() == .running) c else null;
 }
@@ -196,7 +196,7 @@ pub fn Coroutine(comptime Input: type, comptime Yield: type, comptime Return: ty
         /// `panicked` describes it. The coroutine is then finished, its stack
         /// not unwound: what it held is held still.
         pub fn tryNext(self: *Self, input: Input) error{Panicked}!Result {
-            std.debug.assert(self.core.state() == .fresh or self.core.state() == .suspended);
+            aegis.assert.invariant(self.core.state() == .fresh or self.core.state() == .suspended, "self.core.state() == .fresh or self.core.state() == .suspended");
             self.value = .{ .input = input };
             try self.core.enter();
             return switch (self.core.state()) {
@@ -229,9 +229,9 @@ pub fn Coroutine(comptime Input: type, comptime Yield: type, comptime Return: ty
                 self.core.canceling = true;
                 self.value = .{ .input = undefined };
                 self.core.enter() catch self.core.panic.raise();
-                std.debug.assert(self.core.state() == .returned);
+                aegis.assert.invariant(self.core.state() == .returned, "self.core.state() == .returned");
             }
-            std.debug.assert(self.core.state() != .running);
+            aegis.assert.invariant(self.core.state() != .running, "self.core.state() != .running");
             const top = self.top;
             var s = self.core.stack;
             self.core.context.deinit(&s);

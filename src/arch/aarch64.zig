@@ -66,7 +66,7 @@ comptime {
 }
 
 pub fn control() Control {
-    // aegis: boundary: reads the floating-point control register, which a context saves and restores
+    // aegis: boundary(A019): reads the floating-point control register, which a context saves and restores
     return .{ .fpcr = asm volatile ("mrs %[r], fpcr"
         : [r] "=r" (-> u64),
     ) };
@@ -78,7 +78,7 @@ pub fn control() Control {
 /// stack bounds are exchanged last, just before the stack pointer moves
 /// (`teb`).
 pub inline fn swap(t: *const Transfer) *const Transfer {
-    // aegis: boundary: the switch itself: saves the running context's registers into `t.from` and loads `t.to`'s, as AAPCS64 has them
+    // aegis: boundary(A019): the switch itself: saves the running context's registers into `t.from` and loads `t.to`'s, as AAPCS64 has them
     return asm volatile (
         \\ ldp x0, x2, [x1]
         \\ mov x3, sp
@@ -256,7 +256,7 @@ pub const first_frame = 16;
 /// ends a walk there.
 pub fn initial(top: usize, entry: usize, arg: usize, pc: usize, _: Shadow) Registers {
     const sp = top - first_frame;
-    // aegis: internal: inside the stack, below its top
+    // aegis: internal(A019): inside the stack, below its top
     const slots: [*]usize = @ptrFromInt(sp);
     slots[0] = arg;
     slots[1] = entry;
@@ -264,13 +264,13 @@ pub fn initial(top: usize, entry: usize, arg: usize, pc: usize, _: Shadow) Regis
 }
 
 pub fn trampoline() callconv(.naked) noreturn {
-    // aegis: boundary: the first frame's entry: moves the entry and argument `initial` laid in into AAPCS64's argument registers
+    // aegis: boundary(A019): the first frame's entry: moves the entry and argument `initial` laid in into AAPCS64's argument registers
     if (is_windows) asm volatile (
         \\ hint #36
         \\ ldp x0, x9, [sp]
         \\ ldr x1, [x1, #16]
         \\ br x9
-        // aegis: boundary: as above, outside Windows
+        // aegis: boundary(A019): as above, outside Windows
     ) else asm volatile (
         \\ .cfi_undefined lr
         \\ hint #36
@@ -292,7 +292,7 @@ pub const record_return = 8;
 /// pointer authentication is absent it does nothing, and an unsigned
 /// address comes back as it was.
 pub fn returnAddress(saved: usize) usize {
-    // aegis: boundary: strips a pointer authentication code, which only the processor can
+    // aegis: boundary(A019): strips a pointer authentication code, which only the processor can
     return asm ("hint #7"
         : [address] "={lr}" (-> usize),
         : [saved] "0" (saved),
