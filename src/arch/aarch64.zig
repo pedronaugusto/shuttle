@@ -256,7 +256,7 @@ pub const first_frame = 16;
 /// ends a walk there.
 pub fn initial(top: usize, entry: usize, arg: usize, pc: usize, _: Shadow) Registers {
     const sp = top - first_frame;
-    // aegis: internal(A019): inside the stack, below its top
+    // aegis: design(A019): inside the stack, below its top; a stack's layout is address arithmetic over its reservation
     const slots: [*]usize = @ptrFromInt(sp);
     slots[0] = arg;
     slots[1] = entry;

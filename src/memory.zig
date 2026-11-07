@@ -136,7 +136,7 @@ pub fn maxMapCount() ?u64 {
 
 /// The page range `[from, to)`, both page-aligned.
 pub fn pages(from: usize, to: usize) Pages {
-    // aegis: internal(A019): callers pass page boundaries of a reservation of theirs
+    // aegis: design(A019): callers pass page boundaries of a reservation of theirs; a stack's layout is address arithmetic over its reservation
     const start: [*]align(page_size_min) u8 = @ptrFromInt(from);
     return start[0 .. to - from];
 }

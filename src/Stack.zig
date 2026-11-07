@@ -187,7 +187,7 @@ pub fn carveBytes(s: *Stack, len: usize, alignment: std.mem.Alignment) error{Sta
     if (at < s.bottom) return error.StackTooSmall;
     try s.reach(at);
     s.top = at;
-    // aegis: internal(A019): an address inside the stack's usable bytes, committed by `reach`, aligned as asked and with `len` bytes just above
+    // aegis: design(A019): an address inside the stack's usable bytes, committed by `reach`, aligned as asked and with `len` bytes just above; a stack's layout is address arithmetic over its reservation
     return @ptrFromInt(at);
 }
 
@@ -201,7 +201,7 @@ pub fn size(s: *const Stack) Bytes {
 /// went). On Windows only the bytes from `limit` up are committed: `reach`
 /// the lowest byte touched first.
 pub fn usable(s: *const Stack) []u8 {
-    // aegis: internal(A019): the stack's usable bytes, which its reservation holds from `bottom` to `end`
+    // aegis: design(A019): the stack's usable bytes, which its reservation holds from `bottom` to `end`; a stack's layout is address arithmetic over its reservation
     const low: [*]u8 = @ptrFromInt(s.bottom);
     return low[0 .. s.end - s.bottom];
 }

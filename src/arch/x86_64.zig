@@ -349,7 +349,7 @@ pub const first_frame = 48;
 /// the callee may write.
 pub fn initial(top: usize, entry: usize, arg: usize, pc: usize, shadow: Shadow) Registers {
     const sp = if (is_windows) top - first_frame + 8 else top - 32;
-    // aegis: internal(A019): inside the stack, below its top
+    // aegis: design(A019): inside the stack, below its top; a stack's layout is address arithmetic over its reservation
     const slots: [*]usize = @ptrFromInt(sp);
     if (is_windows) {
         slots[0] = 0;

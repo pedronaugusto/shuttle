@@ -149,7 +149,7 @@ pub const headroom = 64;
 pub fn init(stack: *Stack, comptime Arg: type, comptime Message: type, entry: Entry(Arg, Message), arg: Arg) error{StackTooSmall}!Context {
     const top = stack.top - headroom;
     try stack.reach(top - native.first_frame);
-    // aegis: internal(A019): the headroom inside the stack, committed by `reach`
+    // aegis: design(A019): the headroom inside the stack, committed by `reach`; a stack's layout is address arithmetic over its reservation
     const above: [*]u8 = @ptrFromInt(top);
     @memset(above[0..headroom], 0);
     if (native.shadow_stacks and stack.shadow.end == 0 and native.shadowStackPointer() != 0) noShadow();
