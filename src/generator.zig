@@ -41,7 +41,7 @@ pub fn Generator(comptime Yield: type, comptime Error: type) type {
                 .yielded => |v| return v,
                 .returned => |r| {
                     if (comptime none) {
-                        // glint-ignore: Z026 -- a body stopped by its cancel has no more values: null, as when it returns
+                        // a body stopped by its cancel has no more values: null, as when it returns
                         r catch |e| switch (e) {
                             error.Canceled => {},
                         };
