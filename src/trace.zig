@@ -50,7 +50,7 @@ pub fn walk(start: usize, low: usize, high: usize, out: []usize) []usize {
 
 fn load(fp: usize, comptime offset: comptime_int) usize {
     const at = fp +% @as(usize, @bitCast(@as(isize, offset)));
-    // aegis: boundary(A019): `walk` checked the record lies inside the stack
+    // aegis: design(A019): `walk` checked the record lies inside the stack
     return @as(*const usize, @ptrFromInt(at)).*;
 }
 
