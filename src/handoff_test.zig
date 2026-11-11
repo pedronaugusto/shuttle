@@ -61,7 +61,7 @@ const Jobs = struct {
         }
 
         fn run(w: *Worker) void {
-            while (done.load(.acquire).raw() < count) {
+            while (done.load(.acquire).compare(.fromRaw(count)) == .lt) {
                 const job = w.pop() orelse {
                     // glint-ignore: Z026 -- a yield that fails only spins once more
                     std.Thread.yield() catch {};
