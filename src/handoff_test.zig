@@ -61,7 +61,7 @@ const Jobs = struct {
         }
 
         fn run(w: *Worker) void {
-            while (done.load(.acquire) < count) {
+            while (done.load(.acquire).raw() < count) {
                 const job = w.pop() orelse {
                     // glint-ignore: Z026 -- a yield that fails only spins once more
                     std.Thread.yield() catch {};
@@ -74,7 +74,8 @@ const Jobs = struct {
     };
 
     var all: [workers]Worker = undefined;
-    var done: std.atomic.Value(usize) = .init(0);
+    var done: aegis.Atomic(Finished) = .init(.fromRaw(0));
+    const Finished = aegis.units.Count(enum { context }, usize);
     var jobs: [count]Job = undefined;
     var stacks: [count]Stack = undefined;
 
@@ -105,13 +106,13 @@ const Jobs = struct {
     }
 
     fn finished(_: *handoff.After, _: *Context) void {
-        _ = done.fetchAdd(1, .release);
+        _ = done.fetchAddWrapping(.fromRaw(1), .release);
     }
 };
 
 test "worker threads run contexts that park themselves on another worker's queue by the switch away from them" {
     if (!supported or builtin.single_threaded) return error.SkipZigTest;
-    Jobs.done = .init(0);
+    Jobs.done = .init(.fromRaw(0));
     for (&Jobs.all, 0..) |*w, i| w.* = .{ .index = i };
     var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{.{ .size = .fromRaw(64 * 1024), .count = Jobs.count }} });
     defer pool.deinit(std.testing.allocator);
@@ -195,17 +196,21 @@ test "a pool numbers its stacks once across its classes, counts those in use, an
     for (small) |s| pool.give(s);
 }
 
+/// Which churning thread holds a stack, by the number it was started with; 0 is nobody.
+const Holder = aegis.id.Id(enum { churner }, u32);
+const nobody: Holder = .fromRaw(0);
+
 test "threads take and give a pool's stacks at once, each stack held by one at a time" {
     if (!supported or builtin.single_threaded) return error.SkipZigTest;
     const Churn = struct {
-        fn run(pool: *Pool, owners: []std.atomic.Value(u32), me: u32) void {
+        fn run(pool: *Pool, owners: []aegis.Atomic(Holder), me: u32) void {
             for (0..2000) |round| {
                 const size: @import("Stack.zig").Bytes = .fromRaw(if (round % 3 == 0) 128 * 1024 else 16 * 1024);
                 const s = ((if (round % 2 == 0) pool.take(size) else pool.takeExactly(size)) catch @panic("a stack refused")) orelse continue;
                 const n = pool.number(s);
                 // Nobody else holds it.
-                if (owners[n].swap(me, .acq_rel) != 0) @panic("a stack handed out twice");
-                owners[n].store(0, .release);
+                if (owners[n].swap(.fromRaw(me), .acq_rel) != nobody) @panic("a stack handed out twice");
+                owners[n].store(nobody, .release);
                 pool.give(s);
             }
         }
@@ -215,7 +220,7 @@ test "threads take and give a pool's stacks at once, each stack held by one at a
         .{ .size = .fromRaw(256 * 1024), .count = 3 },
     } });
     defer pool.deinit(std.testing.allocator);
-    var owners: [9]std.atomic.Value(u32) = @splat(.init(0));
+    var owners: [9]aegis.Atomic(Holder) = @splat(.init(nobody));
     var threads: [4]std.Thread = undefined;
     for (&threads, 1..) |*t, me| t.* = try std.Thread.spawn(.{}, Churn.run, .{ &pool, &owners, @as(u32, @intCast(me)) });
     for (threads) |t| t.join();
