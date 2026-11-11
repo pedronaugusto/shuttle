@@ -2,6 +2,7 @@
 //! and give pages back.
 const builtin = @import("builtin");
 const std = @import("std");
+const aegis = @import("aegis");
 const posix = std.posix;
 const windows = std.os.windows;
 
@@ -94,7 +95,7 @@ pub fn commit(memory: Pages, as_guard: bool) Error!void {
             else => return error.SystemResources,
         }
     }
-    std.debug.assert(!as_guard);
+    aegis.assert.invariant(!as_guard, "only Windows commits a guard page");
     if (builtin.os.tag == .openbsd) {
         // OpenBSD refuses a stack pointer into memory not mapped as a
         // stack, and maps one only read-write: mapped again in place.
