@@ -8,16 +8,20 @@ aarch64 (Linux, Apple and Windows) and riscv64. It is for any program that
 wants stackful contexts: a fiber job system, a task scheduler, a generator
 over a recursive walk.
 
-Work in progress toward the public cut.
-
 ## Install
 
-Requires Zig 0.17.0. Fetch with `zig fetch --save
+Requires Zig 0.17. Fetch with `zig fetch --save
 git+https://github.com/pedronaugusto/shuttle`, then take the `shuttle` module
 through `b.dependency` and add it to your executable's imports. At run time
 shuttle depends on std and on aegis, a std-only library of checked types. See
 [the design](docs/design.md) for how a switch works, what each layer owns and
 what moving a context between threads asks of its code.
+
+## Stability
+
+shuttle is 0.x and tracks Zig 0.17.x. A breaking change comes only in a minor release
+(0.5 to 0.6), with a CHANGELOG entry saying what changed and what to write instead; a
+patch release never breaks.
 
 ## Usage
 
