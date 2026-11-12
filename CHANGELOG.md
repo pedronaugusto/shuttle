@@ -13,6 +13,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Pins aegis c8982a8, still 0.2.4: six additive commits after 3c0b13e (the role declarations a linter reads, `lint_rules`), the aegis the development build's preflight selects. Nothing shuttle calls changed.
 - The README states shuttle's stability policy (0.x, tracking Zig 0.17.x; a breaking change only in a minor release, with its CHANGELOG entry; a patch release never breaks), where it said work was in progress.
 - Development: handoff_test's counters and stack holders are `aegis.Atomic` cells of a `units.Count` and an `id.Id`, where they were raw `std.atomic.Value`s.
 - `memory.commit`'s one contract left on `std.debug.assert` (a guard page is committed only on Windows) is `aegis.assert.invariant`: it holds in every build.
