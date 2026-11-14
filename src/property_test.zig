@@ -263,8 +263,10 @@ test "a generator yields its body's values in order, then null or its error, and
 }
 
 /// Carving against a model: each piece aligned to its alignment and at
-/// least 16, inside the usable bytes, just below the last and above the
-/// bottom; refused exactly when it would pass the bottom.
+/// least 16, inside the usable bytes and just below the last; refused
+/// exactly when it would reach below the lowest byte the stack can make
+/// usable (its bottom; on Windows the page above, the rest of the stack
+/// growing through its guard page).
 fn carveProgram(_: void, c: *shake.Case) !void {
     var stack = try Stack.init(.{ .size = .fromRaw(16 * 1024) });
     defer stack.deinit();
@@ -273,7 +275,7 @@ fn carveProgram(_: void, c: *shake.Case) !void {
         const len = shake.gen.intRange(c.source, usize, 0, 6 * 1024);
         const alignment: std.mem.Alignment = .fromByteUnits(@as(usize, 1) << shake.gen.intRange(c.source, u6, 0, 12));
         const at = std.mem.alignBackward(usize, top -| len, @max(alignment.toByteUnits(), 16));
-        const fits = len <= top - stack.bottom and at >= stack.bottom;
+        const fits = len <= top - stack.bottom and at >= lowestWritable(stack);
         const got = stack.carveBytes(len, alignment) catch |err| {
             if (fits) return err;
             continue;
@@ -288,7 +290,7 @@ fn carveProgram(_: void, c: *shake.Case) !void {
     }
 }
 
-test "carving takes aligned pieces from the top down, and refuses only past the bottom" {
+test "carving takes aligned pieces from the top down, and refuses only below the lowest usable byte" {
     if (!supported) return error.SkipZigTest;
     try shake.check(std.testing.allocator, {}, carveProgram, .{ .cases = 300 });
 }
