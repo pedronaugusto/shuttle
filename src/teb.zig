@@ -50,7 +50,6 @@ pub fn exchange(save: *Bounds, load: *const Bounds) Exchange {
 }
 
 fn deallocationField() *usize {
-    // aegis: boundary(A019): a field of the running thread's information block
     return @ptrFromInt(@intFromPtr(windows.teb()) + deallocation_offset);
 }
 

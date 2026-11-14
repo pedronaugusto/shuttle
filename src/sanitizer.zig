@@ -8,13 +8,13 @@ const builtin = @import("builtin");
 
 pub const enabled = builtin.sanitize_thread;
 
-// aegis: boundary(A019): ThreadSanitizer's fiber interface, declared as its runtime defines it, called only from this file
+// glint-ignore: P007 -- boundary: ThreadSanitizer's fiber interface, declared as its runtime defines it, called only from this file
 extern fn __tsan_get_current_fiber() *anyopaque;
-// aegis: boundary(A019): as above
+// glint-ignore: P007 -- boundary: as above
 extern fn __tsan_create_fiber(flags: c_uint) *anyopaque;
-// aegis: boundary(A019): as above
+// glint-ignore: P007 -- boundary: as above
 extern fn __tsan_destroy_fiber(fiber: *anyopaque) void;
-// aegis: boundary(A019): as above
+// glint-ignore: P007 -- boundary: as above
 extern fn __tsan_switch_to_fiber(fiber: *anyopaque, flags: c_uint) void;
 
 pub const Fiber = if (enabled) ?*anyopaque else void;

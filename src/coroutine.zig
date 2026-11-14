@@ -58,7 +58,7 @@ pub const Core = struct {
 
     /// Runs the coroutine until it yields, returns or panics.
     fn enter(c: *Core) error{Panicked}!void {
-        _ = c.life.step(.run) catch unreachable; // unreachable: only a fresh or suspended coroutine is run
+        _ = c.life.step(.run) catch unreachable; // glint-ignore: Z026 -- only a fresh or suspended coroutine is run
         // The switch makes `c` what this thread runs inside (its context
         // names it), and the one back installs the caller's again, on
         // whichever thread the caller resumes.
@@ -73,7 +73,7 @@ pub const Core = struct {
 
     /// Back to whoever runs the coroutine, by `step`.
     fn leave(c: *Core, step: Step) void {
-        _ = c.life.step(step) catch unreachable; // unreachable: only the running coroutine leaves, and every way out of running is an edge
+        _ = c.life.step(step) catch unreachable; // glint-ignore: Z026 -- only the running coroutine leaves, and every way out of running is an edge
         _ = Context.switchTo(&c.context, &c.caller, Context.Nothing, null);
     }
 
@@ -253,6 +253,7 @@ pub fn handlePanic(msg: []const u8, first_trace_address: ?usize) noreturn {
         c.panic.record(msg, first_trace_address orelse @returnAddress(), cause, s.bottom, s.end);
         c.abandon();
     }
-    if (cause) |p| p.describe();
+    // Traces that cannot be written leave std's handler to say the rest.
+    if (cause) |p| p.describe() catch std.debug.defaultPanic(msg, first_trace_address);
     std.debug.defaultPanic(msg, first_trace_address);
 }

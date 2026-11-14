@@ -37,12 +37,10 @@ fn allocate(len: usize, kind: windows.MEM.ALLOCATE, protection: windows.PAGE) Er
     // pointer, so the null goes in through an optional of the same layout.
     var base: ?windows.PVOID = null;
     var size: windows.SIZE_T = len;
-    // aegis: boundary(A019): an optional pointer has the pointer's layout, null as zero
     switch (windows.ntdll.NtAllocateVirtualMemory(windows.current_process, @ptrCast(&base), 0, &size, kind, protection)) {
         .SUCCESS => {},
         else => return error.SystemResources,
     }
-    // aegis: boundary(A019): the system hands out whole pages
     const start: [*]align(page_size_min) u8 = @ptrCast(@alignCast(base.?));
     return start[0..len];
 }
@@ -112,12 +110,13 @@ pub fn commit(memory: Pages, as_guard: bool) Error!void {
 /// Gives `memory`'s pages back to the system; they read as zero (Linux) or
 /// as anything (elsewhere) once touched again. Windows keeps them: a stack
 /// grows there through its guard page, and a page given back below the
-/// guard would never be committed again.
-pub fn discard(memory: Pages) void {
-    if (is_windows) return;
+/// guard would never be committed again. Whether the system took them:
+/// pages it did not take stay usable as they were.
+pub fn discard(memory: Pages) bool {
+    if (is_windows) return false;
     const advice: u32 = if (builtin.os.tag == .linux) std.os.linux.MADV.DONTNEED else posix.MADV.FREE;
-    // Pages not given back stay usable: there is nothing to report.
-    posix.madvise(memory.ptr, memory.len, advice) catch return;
+    posix.madvise(memory.ptr, memory.len, advice) catch return false;
+    return true;
 }
 
 /// Linux: the most mappings a process may hold (`vm.max_map_count`), or
@@ -137,7 +136,6 @@ pub fn maxMapCount() ?u64 {
 
 /// The page range `[from, to)`, both page-aligned.
 pub fn pages(from: usize, to: usize) Pages {
-    // aegis: design(A019): callers pass page boundaries of a reservation of theirs; a stack's layout is address arithmetic over its reservation
     const start: [*]align(page_size_min) u8 = @ptrFromInt(from);
     return start[0 .. to - from];
 }

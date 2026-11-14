@@ -173,7 +173,6 @@ pub fn reach(s: *Stack, low: usize) error{StackTooSmall}!void {
 /// what is left to run on.
 pub fn carve(s: *Stack, comptime T: type) error{StackTooSmall}!*T {
     const bytes = try s.carveBytes(@sizeOf(T), .of(T));
-    // aegis: internal(A019): `carveBytes` gave room for a `T` at an address aligned for one
     return @ptrCast(@alignCast(bytes));
 }
 
@@ -187,7 +186,6 @@ pub fn carveBytes(s: *Stack, len: usize, alignment: std.mem.Alignment) error{Sta
     if (at < s.bottom) return error.StackTooSmall;
     try s.reach(at);
     s.top = at;
-    // aegis: design(A019): an address inside the stack's usable bytes, committed by `reach`, aligned as asked and with `len` bytes just above; a stack's layout is address arithmetic over its reservation
     return @ptrFromInt(at);
 }
 
@@ -201,7 +199,6 @@ pub fn size(s: *const Stack) Bytes {
 /// went). On Windows only the bytes from `limit` up are committed: `reach`
 /// the lowest byte touched first.
 pub fn usable(s: *const Stack) []u8 {
-    // aegis: design(A019): the stack's usable bytes, which its reservation holds from `bottom` to `end`; a stack's layout is address arithmetic over its reservation
     const low: [*]u8 = @ptrFromInt(s.bottom);
     return low[0 .. s.end - s.bottom];
 }
@@ -224,7 +221,8 @@ pub fn guards(s: *const Stack, address: usize) bool {
 pub fn discard(s: *const Stack, keep_from: usize) void {
     const high = std.mem.alignBackward(usize, @min(keep_from, s.end), memory.pageSize());
     if (high <= s.bottom) return;
-    memory.discard(memory.pages(s.bottom, high));
+    // Pages the system did not take stay usable: the stack is as it was.
+    _ = memory.discard(memory.pages(s.bottom, high));
 }
 
 /// Tells Valgrind the stack is one, so that a switch onto it is not taken

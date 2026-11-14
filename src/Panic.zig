@@ -70,30 +70,30 @@ pub fn record(p: *Panic, msg: []const u8, first_trace_address: usize, cause: ?*c
 
 /// Prints the traces of the coroutines a panic came up through, innermost
 /// first, and says the code they came up to panicked with it.
-pub fn describe(p: *const Panic) void {
-    describeOne(p);
+pub fn describe(p: *const Panic) std.Io.Writer.Error!void {
+    try describeOne(p);
     var buffer: [64]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer).terminal();
     defer std.debug.unlockStderr();
-    stderr.writer.writeAll("the code that ran it panicked with it:\n") catch return;
+    try stderr.writer.writeAll("the code that ran it panicked with it:\n");
 }
 
-fn describeOne(p: *const Panic) void {
-    if (p.cause) |inner| describeOne(inner);
+fn describeOne(p: *const Panic) std.Io.Writer.Error!void {
+    if (p.cause) |inner| try describeOne(inner);
     var buffer: [64]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer).terminal();
     defer std.debug.unlockStderr();
     const w = stderr.writer;
     if (p.cause == null) {
-        w.print("shuttle: a coroutine panicked: {s}\n", .{p.message()}) catch return;
+        try w.print("shuttle: a coroutine panicked: {s}\n", .{p.message()});
     } else {
-        w.writeAll("the coroutine that ran it panicked with it:\n") catch return;
+        try w.writeAll("the coroutine that ran it panicked with it:\n");
     }
-    w.writeAll("coroutine stack trace:\n") catch return;
+    try w.writeAll("coroutine stack trace:\n");
     // std's trace takes its addresses as a mutable slice, which writing one
     // only reads: a copy of them, here on the way out.
     var addresses: @TypeOf(p.trace_addresses) = @splat(0);
     const kept = p.returnAddresses();
     @memcpy(addresses[0..kept.len], kept);
-    std.debug.writeStackTrace(&.{ .return_addresses = addresses[0..kept.len], .skipped = .none }, stderr) catch return;
+    try std.debug.writeStackTrace(&.{ .return_addresses = addresses[0..kept.len], .skipped = .none }, stderr);
 }

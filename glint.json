@@ -1,0 +1,46 @@
+{
+  "seams": [
+    {
+      "file": "src/arch/x86_64.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the switch on x86_64: inline assembly that saves and loads the registers a call keeps and the floating-point control state, the first frame laid in a stack's own bytes, and Linux's shadow-stack calls, which only the processor and the kernel check"
+    },
+    {
+      "file": "src/arch/aarch64.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the switch on aarch64: inline assembly that saves and loads the registers a call keeps, FPCR and the link register, and the first frame laid in a stack's own bytes"
+    },
+    {
+      "file": "src/arch/riscv64.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the switch on riscv64: inline assembly that saves and loads the registers a call keeps and fcsr, and the first frame laid in a stack's own bytes"
+    },
+    {
+      "file": "src/memory.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the pages stacks live in: reserving, committing, guarding and releasing address space through mmap, mprotect, madvise and VirtualAlloc, whose results are addresses no build checks"
+    },
+    {
+      "file": "src/teb.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "the Windows thread information block's stack bounds, read and written at the offsets the system keeps them, which a switch moves to the stack it runs next"
+    },
+    {
+      "file": "src/Stack.zig",
+      "rules": [
+        "P007"
+      ],
+      "reason": "a stack's layout: address arithmetic over the reservation memory.zig hands out, carving and handing out its usable bytes between the guard and the top"
+    }
+  ]
+}

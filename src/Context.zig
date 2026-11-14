@@ -75,7 +75,7 @@ threadlocal var running_inside: ?*Context = null;
 /// in optimized builds). The address passes through an assembly statement,
 /// which the compiler cannot see through.
 noinline fn insideSlot() *?*Context {
-    // aegis: boundary(A019): the slot's address passes through the processor unchanged, so the compiler cannot reuse one from before a switch
+    // glint-ignore: P007 -- boundary: the slot's address passes through the processor unchanged, so the compiler cannot reuse one from before a switch
     return asm volatile (""
         : [address] "=r" (-> *?*Context),
         : [slot] "0" (&running_inside),
@@ -149,9 +149,9 @@ pub const headroom = 64;
 pub fn init(stack: *Stack, comptime Arg: type, comptime Message: type, entry: Entry(Arg, Message), arg: Arg) error{StackTooSmall}!Context {
     const top = stack.top - headroom;
     try stack.reach(top - native.first_frame);
-    // aegis: design(A019): the headroom inside the stack, committed by `reach`; a stack's layout is address arithmetic over its reservation
-    const above: [*]u8 = @ptrFromInt(top);
-    @memset(above[0..headroom], 0);
+    // glint-ignore: P007 -- design: the headroom inside the stack, committed by `reach`; a stack's layout is address arithmetic over its reservation
+    const above: *[headroom]u8 = @ptrFromInt(top);
+    @memset(above, 0);
     if (native.shadow_stacks and stack.shadow.end == 0 and native.shadowStackPointer() != 0) noShadow();
     const registers = native.initial(top, @intFromPtr(entry), @intFromPtr(arg), @intFromPtr(&native.trampoline), stack.shadow); // safe: addresses, laid in the first frame and read back as functions and an argument
     return .{
@@ -209,7 +209,7 @@ pub inline fn switchTo(from: *Context, to: *Context, comptime Message: type, mes
         .{ .from = &from.registers, .to = &to.registers, .message = message, .bounds = teb.exchange(&from.bounds, &to.bounds) }
     else
         .{ .from = &from.registers, .to = &to.registers, .message = message };
-    // aegis: boundary(A019): the swap hands back the word the switch that resumed `from` sent, which every switch to `from` sends as a `Message`
+    // glint-ignore: P007 -- boundary: the swap hands back the word the switch that resumed `from` sent, which every switch to `from` sends as a `Message`
     return @ptrCast(@alignCast(native.swap(&t).message));
 }
 

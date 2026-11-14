@@ -88,8 +88,9 @@ in_use: aegis.Atomic(Stacks) = .init(.fromRaw(0)),
 /// A number of stacks.
 const Stacks = aegis.units.Count(struct {}, u32);
 
-/// One class's stacks.
-const Shelf = struct {
+/// One class's stacks: the pool's own state, the type of its `classes`,
+/// read through the pool's functions.
+pub const Shelf = struct {
     layout: Stack.Layout,
     count: u32,
     /// The number of the class's first stack among all the pool's.
@@ -171,7 +172,7 @@ const Shelf = struct {
     fn claim(s: *Shelf) ?u32 {
         var next = s.fresh.load(.monotonic);
         while (next.compare(.fromRaw(s.count)) == .lt) {
-            const after = next.add(.fromRaw(1)) catch unreachable; // unreachable: below the class's count, a u32
+            const after = next.add(.fromRaw(1)) catch unreachable; // glint-ignore: Z026 -- below the class's count, a u32
             next = s.fresh.cmpxchgWeak(next, after, .monotonic, .monotonic) orelse return next.raw();
         }
         return null;
@@ -179,8 +180,9 @@ const Shelf = struct {
 };
 
 /// A lock-free stack of a class's stack indices, linked through the
-/// class's `links`, its head tagged against reuse.
-const List = struct {
+/// class's `links`, its head tagged against reuse: the type of a shelf's
+/// `free` and `unmade`.
+pub const List = struct {
     head: aegis.Atomic(Head) = .init(.of(.{ .index_plus_one = .end, .tag = 0 })),
 
     fn pop(l: *List, links: []aegis.Atomic(Link)) ?u32 {
@@ -264,7 +266,7 @@ pub fn init(gpa: std.mem.Allocator, options: Options) InitError!Pool {
     var offset: usize = @intFromPtr(reservation.ptr); // safe: an address, to lay the classes out
     for (shelves) |*s| {
         s.base = offset;
-        offset += s.span() catch unreachable; // unreachable: summed above without overflow
+        offset += s.span() catch unreachable; // glint-ignore: Z026 -- summed above without overflow
     }
     return .{ .classes = shelves, .reservation = reservation, .guard = guard };
 }
@@ -376,7 +378,7 @@ pub fn inUse(p: *const Pool) u32 {
 /// space. At most `count()`.
 pub fn reached(p: *const Pool) u32 {
     var n: u32 = 0;
-    // aegis: no-danger(A004, A010): a class's `fresh` stays below its count (`claim`), and `init` summed the counts in a u32 with a check
+    // glint-ignore: A004 -- no-danger: a class's `fresh` stays below its count (`claim`), and `init` summed the counts in a u32 with a check
     for (p.classes) |*s| n += s.fresh.load(.monotonic).raw();
     return n;
 }

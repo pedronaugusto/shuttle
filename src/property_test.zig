@@ -140,3 +140,155 @@ test "coroutines run, canceled and replaced in any order yield and return what t
     if (!supported) return error.SkipZigTest;
     try shake.check(std.testing.allocator, {}, coroutineProgram, .{ .cases = 200 });
 }
+
+/// A pool's books against a model: what is in use and what was ever made
+/// usable (a freed stack is handed out again before a fresh one), each
+/// stack's number below `count()` and its own, `stackOf` describing the
+/// stack `take` handed out, and `takeExactly` held to the smallest class
+/// that fits.
+fn poolBooks(_: void, c: *shake.Case) !void {
+    var pool = try Pool.init(c.gpa, .{ .classes = &.{
+        .{ .size = .fromRaw(sizes[1]), .count = counts[1] },
+        .{ .size = .fromRaw(sizes[0]), .count = counts[0] },
+        .{ .size = .fromRaw(sizes[2]), .count = counts[2] },
+    } });
+    defer pool.deinit(c.gpa);
+    const total = counts[0] + counts[1] + counts[2];
+    if (pool.count() != total) return error.WrongCount;
+    var held: [10]Stack = undefined;
+    var len: usize = 0;
+    var in_use: [3]u32 = @splat(0);
+    var most: [3]u32 = @splat(0);
+    defer for (held[0..len]) |s| pool.give(s);
+    while (c.source.more(40)) {
+        if (len > 0 and shake.gen.boolean(c.source)) {
+            const i = shake.gen.intRange(c.source, usize, 0, len - 1);
+            in_use[classOf(held[i])] -= 1;
+            // Given back by its number alone, as a holder of the number would.
+            pool.give(pool.stackOf(pool.number(held[i])));
+            held[i] = held[len - 1];
+            len -= 1;
+        } else {
+            const want = shake.gen.intRange(c.source, usize, 1, 300 * 1024);
+            const smallest: ?usize = for (sizes, 0..) |size, class| {
+                if (size >= want) break class;
+            } else null;
+            const exact = shake.gen.boolean(c.source);
+            const expected: ?usize = if (exact)
+                (if (smallest) |class| (if (in_use[class] < counts[class]) class else null) else null)
+            else for (sizes, 0..) |size, class| {
+                if (size >= want and in_use[class] < counts[class]) break class;
+            } else null;
+            const got = if (exact) try pool.takeExactly(.fromRaw(want)) else try pool.take(.fromRaw(want));
+            if ((got == null) != (expected == null)) return error.WrongAvailability;
+            const s = got orelse continue;
+            if (classOf(s) != expected.?) return error.WrongClass;
+            const n = pool.number(s);
+            if (n >= pool.count()) return error.NumberPastCount;
+            for (held[0..len]) |other| if (pool.number(other) == n) return error.NumberShared;
+            const again = pool.stackOf(n);
+            if (again.base != s.base or again.bottom != s.bottom or again.end != s.end) return error.StackOfDiffers;
+            in_use[expected.?] += 1;
+            most[expected.?] = @max(most[expected.?], in_use[expected.?]);
+            held[len] = s;
+            len += 1;
+        }
+        if (pool.inUse() != in_use[0] + in_use[1] + in_use[2]) return error.WrongInUse;
+        if (pool.reached() != most[0] + most[1] + most[2]) return error.WrongReached;
+    }
+}
+
+test "a pool's books: in use, ever made usable, numbers and exact takes, against a model" {
+    if (!supported) return error.SkipZigTest;
+    try shake.check(std.testing.allocator, {}, poolBooks, .{ .cases = 200 });
+}
+
+const Values = @import("generator.zig").Generator(u32, error{Stopped});
+
+/// Yields `values`, then returns, or fails with `error.Stopped` when told
+/// to; counts how often its defer ran and whether it saw a cancel.
+fn yieldAll(y: *Values.Yielder, values: []const u32, fail: bool, ends: *u32, canceled: *bool) (error{ Stopped, Canceled })!void {
+    defer ends.* += 1;
+    for (values) |v| y.yield(v) catch |err| {
+        canceled.* = true;
+        return err;
+    };
+    if (fail) return error.Stopped;
+}
+
+fn generatorProgram(_: void, c: *shake.Case) !void {
+    var values: [8]u32 = undefined;
+    const n = shake.gen.intRange(c.source, usize, 0, values.len);
+    for (values[0..n]) |*v| v.* = shake.gen.int(c.source, u32);
+    const fail = shake.gen.boolean(c.source);
+    // How many values the reader takes before ending the generator; past
+    // the last, it reads the end too.
+    const reads = shake.gen.intRange(c.source, usize, 0, n + 2);
+    var ends: u32 = 0;
+    var canceled = false;
+    var g = try Values.init(try Stack.init(.{ .size = .fromRaw(32 * 1024) }), yieldAll, .{ values[0..n], fail, &ends, &canceled });
+    var read: usize = 0;
+    var finished = false;
+    while (read < reads) : (read += 1) {
+        const got = g.next() catch |err| {
+            if (!fail or read != n) return error.UnexpectedError;
+            if (err != error.Stopped) return error.WrongError;
+            finished = true;
+            break;
+        };
+        if (read < n) {
+            if (got != values[read]) return error.WrongValue;
+        } else {
+            if (got != null) return error.ValuePastTheEnd;
+            if (fail and read == n) return error.ErrorNotReturned;
+            finished = true;
+            if (read > n) break;
+        }
+    }
+    var s = g.deinit();
+    s.deinit();
+    // A body never started never runs; one started ended exactly once: by
+    // returning, or canceled through its defers when ended early.
+    if (reads == 0) {
+        if (ends != 0 or canceled) return error.RanUnstarted;
+        return;
+    }
+    if (ends != 1) return error.DefersNotRunOnce;
+    if (canceled == finished) return error.WrongCancel;
+}
+
+test "a generator yields its body's values in order, then null or its error, and ending it early cancels the body once" {
+    if (!supported) return error.SkipZigTest;
+    try shake.check(std.testing.allocator, {}, generatorProgram, .{ .cases = 200 });
+}
+
+/// Carving against a model: each piece aligned to its alignment and at
+/// least 16, inside the usable bytes, just below the last and above the
+/// bottom; refused exactly when it would pass the bottom.
+fn carveProgram(_: void, c: *shake.Case) !void {
+    var stack = try Stack.init(.{ .size = .fromRaw(16 * 1024) });
+    defer stack.deinit();
+    var top = stack.top;
+    while (c.source.more(30)) {
+        const len = shake.gen.intRange(c.source, usize, 0, 6 * 1024);
+        const alignment: std.mem.Alignment = .fromByteUnits(@as(usize, 1) << shake.gen.intRange(c.source, u6, 0, 12));
+        const at = std.mem.alignBackward(usize, top -| len, @max(alignment.toByteUnits(), 16));
+        const fits = len <= top - stack.bottom and at >= stack.bottom;
+        const got = stack.carveBytes(len, alignment) catch |err| {
+            if (fits) return err;
+            continue;
+        };
+        if (!fits) return error.CarvedPastTheBottom;
+        const address = @intFromPtr(got);
+        if (address != at) return error.WrongPlace;
+        if (!alignment.check(address) or address % 16 != 0) return error.Misaligned;
+        if (address + len > top or address < stack.bottom) return error.OutsideTheStack;
+        top = address;
+        if (stack.top != top) return error.TopNotMoved;
+    }
+}
+
+test "carving takes aligned pieces from the top down, and refuses only past the bottom" {
+    if (!supported) return error.SkipZigTest;
+    try shake.check(std.testing.allocator, {}, carveProgram, .{ .cases = 300 });
+}

@@ -6,13 +6,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Breaking
+
+- `Panic.describe` returns `std.Io.Writer.Error!void`, the failure to write a panic's traces, where it gave up silently: the panic handler goes on to std's when they cannot be written, and the stack overflow handler ends the process at once when its report cannot be.
+- `Pool.classes` is a slice of the public `Pool.Shelf`, one class's stacks, and a shelf's `free` and `unmade` of the public `Pool.List`, where both types were private: the pool's own state, read through its functions.
+
 ### Added
+
+- Properties for what the README promises of a pool's books (`inUse`, `reached`, `number` and `stackOf`, `takeExactly`), of a generator (its values in order, then null or its error, and ending it early cancels the body once), and of carving (aligned pieces from the top down, refused only past the bottom), each checked against a planted fault.
 
 - Contexts run under CET shadow stacks on Linux x86_64 (with the LLVM backend): a stack made on a thread that has a shadow stack gets one of its own (`Stack.shadow`; a pool keeps each of its stacks' for the pool's life), the switch saves the shadow stack pointer of the context it leaves and takes the restore token of the one it resumes, and a new context on a reused stack starts its shadow stack at the end again. A context made on such a thread on a stack without one panics, where its returns would fault far from it.
 - The resume address and a new context's trampoline are landing pads (`endbr64` on x86_64, `bti j` on aarch64), for indirect branch tracking and branch target identification; both are no-ops where those are off.
 
 ### Changed
 
+- Pins aegis dc3ed602, still 0.2.4; development on preflight's ci-standard 0990716 and glint 0.8, and shakedown ed5a873. The machine boundary (the switch on each architecture, the pages stacks live in, the Windows thread block, a stack's layout) is declared as glint seams; a new context's headroom is zeroed through an array pointer.
 - Pins aegis c8982a8, still 0.2.4: six additive commits after 3c0b13e (the role declarations a linter reads, `lint_rules`), the aegis the development build's preflight selects. Nothing shuttle calls changed.
 - The README states shuttle's stability policy (0.x, tracking Zig 0.17.x; a breaking change only in a minor release, with its CHANGELOG entry; a patch release never breaks), where it said work was in progress.
 - Development: handoff_test's counters and stack holders are `aegis.Atomic` cells of a `units.Count` and an `id.Id`, where they were raw `std.atomic.Value`s.

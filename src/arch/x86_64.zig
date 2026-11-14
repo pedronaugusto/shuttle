@@ -84,7 +84,6 @@ pub fn shadowFor(usable: usize) error{SystemResources}!Shadow {
 pub fn releaseShadow(shadow: Shadow, usable: usize) void {
     if (!shadow_stacks or shadow.end == 0) return;
     // Unmapping a whole mapping this process made cannot fail.
-    // aegis: boundary(A019): munmap takes back the mapping map_shadow_stack returned as a number
     _ = std.os.linux.munmap(@ptrFromInt(shadow.end - usable), usable);
 }
 
@@ -92,7 +91,6 @@ pub fn releaseShadow(shadow: Shadow, usable: usize) void {
 /// stack: RDSSP is then a no-op, and leaves the zero.
 pub fn shadowStackPointer() usize {
     if (!shadow_stacks) return 0;
-    // aegis: boundary(A019): reads the shadow stack pointer, which only the processor holds
     return asm volatile ("rdsspq %[ssp]"
         : [ssp] "=r" (-> usize),
         : [zero] "0" (@as(usize, 0)),
@@ -121,7 +119,6 @@ comptime {
 /// The control state of the running code.
 pub fn control() Control {
     var c: Control = .{ .mxcsr = 0, .x87 = 0 };
-    // aegis: boundary(A019): reads MXCSR and the x87 control word, which a context saves and restores
     asm volatile (
         \\ stmxcsr (%%rax)
         \\ fnstcw 4(%%rax)
@@ -136,12 +133,10 @@ pub fn control() Control {
 /// address goes in the register a new context's entry takes its second
 /// argument in (rsi, or rdx on Windows), so the trampoline need not move it.
 pub inline fn swap(t: *const Transfer) *const Transfer {
-    // aegis: boundary(A019): the switch itself: saves the running context's registers into `t.from` and loads `t.to`'s, as the Windows x64 convention has them
     if (is_windows) return asm volatile (body("rdx")
         : [received] "={rdx}" (-> *const Transfer),
         : [sent] "0" (t),
         : clobbers(.rdx));
-    // aegis: boundary(A019): the switch itself, as the System V convention has the registers
     return asm volatile (body("rsi")
         : [received] "={rsi}" (-> *const Transfer),
         : [sent] "0" (t),
@@ -349,7 +344,6 @@ pub const first_frame = 48;
 /// the callee may write.
 pub fn initial(top: usize, entry: usize, arg: usize, pc: usize, shadow: Shadow) Registers {
     const sp = if (is_windows) top - first_frame + 8 else top - 32;
-    // aegis: design(A019): inside the stack, below its top; a stack's layout is address arithmetic over its reservation
     const slots: [*]usize = @ptrFromInt(sp);
     if (is_windows) {
         slots[0] = 0;
@@ -390,13 +384,11 @@ const shadow_start =
 
 /// The first instructions of a context.
 pub fn trampoline() callconv(.naked) noreturn {
-    // aegis: boundary(A019): the first frame's entry: moves the entry and argument `initial` laid in into the Windows x64 argument registers
     if (is_windows) asm volatile (
         \\ endbr64
         \\ movq 8(%%rsp), %%rcx
         \\ movq 16(%%rdx), %%rdx
         \\ jmpq *16(%%rsp)
-        // aegis: boundary(A019): as above, into the System V argument registers
     ) else asm volatile (
         \\ .cfi_undefined %%rip
         \\ endbr64

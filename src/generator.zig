@@ -43,7 +43,7 @@ pub fn Generator(comptime Yield: type, comptime Error: type) type {
                     if (comptime none) {
                         // a body stopped by its cancel has no more values: null, as when it returns
                         r catch |e| switch (e) {
-                            error.Canceled => {},
+                            error.Canceled => return null,
                         };
                     } else {
                         r catch |e| switch (e) {

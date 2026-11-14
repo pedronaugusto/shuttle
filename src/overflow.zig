@@ -82,12 +82,14 @@ fn register(ctx: std.debug.CpuContextPtr, number: u16) ?usize {
 pub fn handleSegfault(address: ?usize, name: []const u8, context: ?std.debug.CpuContextPtr) noreturn {
     if (address) |a| {
         const d = diagnose(a, context);
-        describe(a, d);
+        // A report that cannot be written ends the process at once, as it
+        // would end once written.
+        describe(a, d) catch std.process.abort();
         switch (d) {
-            .coroutine => |s| traceOverflowed(s.bottom, s.end, context),
+            .coroutine => |s| traceOverflowed(s.bottom, s.end, context) catch std.process.abort(),
             // The stack's top is unknown: the walk ends at its first frame,
             // or where the chain breaks.
-            .near_stack_pointer => |sp| traceOverflowed(sp, std.math.maxInt(usize), context),
+            .near_stack_pointer => |sp| traceOverflowed(sp, std.math.maxInt(usize), context) catch std.process.abort(),
             .other => std.debug.defaultHandleSegfault(address, name, context),
         }
         std.process.abort();
@@ -96,7 +98,7 @@ pub fn handleSegfault(address: ?usize, name: []const u8, context: ?std.debug.Cpu
 }
 
 /// The overflowed stack's frames, from where it faulted to its first.
-fn traceOverflowed(low: usize, high: usize, context: ?std.debug.CpuContextPtr) void {
+fn traceOverflowed(low: usize, high: usize, context: ?std.debug.CpuContextPtr) std.Io.Writer.Error!void {
     const ctx = context orelse return;
     var addresses: [33]usize = @splat(0);
     var n: usize = 0;
@@ -110,18 +112,18 @@ fn traceOverflowed(low: usize, high: usize, context: ?std.debug.CpuContextPtr) v
     var buffer: [64]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer).terminal();
     defer std.debug.unlockStderr();
-    stderr.writer.writeAll("stack trace of the stack that overflowed:\n") catch return;
-    std.debug.writeStackTrace(&.{ .return_addresses = addresses[0..n], .skipped = if (n == addresses.len) .unknown else .none }, stderr) catch return;
+    try stderr.writer.writeAll("stack trace of the stack that overflowed:\n");
+    try std.debug.writeStackTrace(&.{ .return_addresses = addresses[0..n], .skipped = if (n == addresses.len) .unknown else .none }, stderr);
 }
 
-fn describe(address: usize, d: Diagnosis) void {
+fn describe(address: usize, d: Diagnosis) std.Io.Writer.Error!void {
     var buffer: [64]u8 = undefined;
     const stderr = std.debug.lockStderr(&buffer).terminal();
     defer std.debug.unlockStderr();
     const w = stderr.writer;
     switch (d) {
-        .coroutine => |s| w.print("shuttle: stack overflow in a coroutine: it touched 0x{x}, in the guard below its stack of {d} bytes (0x{x} to 0x{x}); give it a larger stack\n", .{ address, s.size().raw(), s.bottom, s.end }) catch return,
-        .near_stack_pointer => |sp| w.print("shuttle: stack overflow: the fault at 0x{x} is beside the stack pointer, 0x{x}; the stack that ran out is too small for the code on it\n", .{ address, sp }) catch return,
+        .coroutine => |s| try w.print("shuttle: stack overflow in a coroutine: it touched 0x{x}, in the guard below its stack of {d} bytes (0x{x} to 0x{x}); give it a larger stack\n", .{ address, s.size().raw(), s.bottom, s.end }),
+        .near_stack_pointer => |sp| try w.print("shuttle: stack overflow: the fault at 0x{x} is beside the stack pointer, 0x{x}; the stack that ran out is too small for the code on it\n", .{ address, sp }),
         .other => {},
     }
 }

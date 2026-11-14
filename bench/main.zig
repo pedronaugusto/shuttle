@@ -105,7 +105,7 @@ const Bench = struct {
     }
 
     fn numbersNext(b: *Bench, units: u64) WorkloadError!void {
-        for (0..units) |_| b.sink +%= (b.numbers.next() catch unreachable).?; // unreachable: the body fails only when canceled
+        for (0..units) |_| b.sink +%= (b.numbers.next() catch unreachable).?; // glint-ignore: Z026 -- the body fails only when canceled
     }
 
     // Making contexts.
@@ -152,7 +152,7 @@ const Bench = struct {
     fn coroutinePooled(b: *Bench, units: u64) WorkloadError!void {
         for (0..units) |i| {
             const co = try Counter.init(try b.pool.take(.fromRaw(64 * 1024)) orelse return error.PoolEmpty, once, .{});
-            b.sink +%= co.next(i).returned catch unreachable; // unreachable: the body fails only when canceled
+            b.sink +%= co.next(i).returned catch unreachable; // glint-ignore: Z026 -- the body fails only when canceled
             b.pool.give(co.deinit());
         }
     }
