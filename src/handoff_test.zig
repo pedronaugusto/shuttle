@@ -256,23 +256,37 @@ test "a pool makes a stack usable only when it is first handed out, and keeps it
 
 test "a stack the system refuses to make usable is an error at its take, and is tried again later" {
     if (!supported) return error.SkipZigTest;
-    // The refusal is made real by taking the stack's address space away
-    // from the reservation, which a commit then fails on. Windows releases
-    // a reservation only whole.
-    if (builtin.os.tag == .windows) return error.SkipZigTest;
+    // The refusal is made real by mapping a file opened only for reading
+    // over the stack's address space, which no system makes writable: the
+    // commit's mprotect fails there with EACCES. (A hole in the range is no
+    // refusal on FreeBSD, whose mprotect skips it.) Windows releases a
+    // reservation only whole, and OpenBSD commits by mapping in place.
+    if (builtin.os.tag == .windows or builtin.os.tag == .openbsd) return error.SkipZigTest;
+    const io = std.testing.io;
     var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{.{ .size = .fromRaw(64 * 1024), .count = 2 }} });
     defer pool.deinit(std.testing.allocator);
     const held = (try pool.take(.fromRaw(16 * 1024))).?;
+    errdefer pool.give(held);
     // The next stack never handed out is the second.
     const next = pool.stackOf(1);
     const range = @import("memory.zig").pages(next.base, next.end);
-    std.posix.munmap(range);
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    {
+        const file = try tmp.dir.createFile(io, "pages", .{});
+        defer file.close(io);
+        try file.setLength(io, range.len);
+    }
+    const read_only = try tmp.dir.openFile(io, "pages", .{});
+    defer read_only.close(io);
+    _ = try std.posix.mmap(range.ptr, range.len, .{ .READ = true }, .{ .TYPE = .SHARED, .FIXED = true }, read_only.handle, 0);
     try std.testing.expectError(error.SystemResources, pool.take(.fromRaw(16 * 1024)));
     try std.testing.expectError(error.SystemResources, pool.takeExactly(.fromRaw(16 * 1024)));
     try std.testing.expectEqual(@as(u32, 1), pool.inUse());
     // The address space back, as the reservation had it: the stack is made.
     _ = try std.posix.mmap(range.ptr, range.len, .{}, .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .FIXED = true }, -1, 0);
     const made = (try pool.take(.fromRaw(16 * 1024))).?;
+    errdefer pool.give(made);
     try std.testing.expectEqual(next.bottom, made.bottom);
     try std.testing.expect(made.guards(made.bottom - 1));
     const usable = made.usable();
