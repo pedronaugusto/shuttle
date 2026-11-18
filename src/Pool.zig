@@ -78,6 +78,8 @@ pub const TakeError = error{
     SystemResources,
 };
 
+/// Private: the allocator `init` took, which `deinit` frees with.
+gpa: std.mem.Allocator,
 classes: []Shelf,
 /// Every stack's address space, all classes' in one mapping.
 reservation: memory.Pages,
@@ -268,12 +270,13 @@ pub fn init(gpa: std.mem.Allocator, options: Options) InitError!Pool {
         s.base = offset;
         offset += s.span() catch unreachable; // glint-ignore: Z026 -- summed above without overflow
     }
-    return .{ .classes = shelves, .reservation = reservation, .guard = guard };
+    return .{ .gpa = gpa, .classes = shelves, .reservation = reservation, .guard = guard };
 }
 
 /// Releases every stack. None may be in use.
-pub fn deinit(p: *Pool, gpa: std.mem.Allocator) void {
+pub fn deinit(p: *Pool) void {
     aegis.assert.invariant(p.inUse() == 0, "p.inUse() == 0");
+    const gpa = p.gpa;
     for (p.classes) |*s| s.deinit(gpa);
     gpa.free(p.classes);
     if (p.reservation.len > 0) memory.release(p.reservation);

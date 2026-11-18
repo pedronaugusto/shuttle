@@ -105,7 +105,7 @@ fn jobs() !void {
         .{ .size = .fromRaw(64 * 1024), .count = 128 },
         .{ .size = .fromRaw(1024 * 1024), .count = 8 },
     } });
-    defer pool.deinit(gpa);
+    defer pool.deinit();
     var worker: shuttle.Context = .{};
     var job: Job = .{ .context = undefined, .stack = (try pool.take(.fromRaw(16 * 1024))).?, .worker = &worker };
     job.context = try shuttle.handoff.init(&job.stack, *Job, work, &job);

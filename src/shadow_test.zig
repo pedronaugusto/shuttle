@@ -98,7 +98,7 @@ fn exercise(run: *Run) !void {
     for (0..uses_per_stack) |_| try runOn(&stack, rounds_per_task, run);
 
     var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{.{ .size = .fromRaw(64 * 1024), .count = 2 }} });
-    defer pool.deinit(std.testing.allocator);
+    defer pool.deinit();
     for (0..uses_per_stack) |_| {
         var pooled = (try pool.take(.fromRaw(64 * 1024))).?;
         if (pooled.shadow.end == 0) return error.NoShadowStack;

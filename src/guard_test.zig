@@ -56,7 +56,7 @@ test "on Linux 6.13 and later a pool's guards are guard regions, and its stacks 
 
     const gpa = std.testing.allocator;
     var pool = try Pool.init(gpa, .{ .classes = &.{.{ .size = .fromRaw(64 * 1024), .count = 3 }} });
-    defer pool.deinit(gpa);
+    defer pool.deinit();
     try std.testing.expectEqual(Stack.Guard.region, pool.guard);
     var stacks: [3]Stack = undefined;
     for (&stacks) |*s| s.* = (try pool.take(.fromRaw(64 * 1024))).?;

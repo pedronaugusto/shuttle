@@ -18,7 +18,7 @@ fn poolProgram(_: void, c: *shake.Case) !void {
         .{ .size = .fromRaw(sizes[0]), .count = counts[0] },
         .{ .size = .fromRaw(sizes[1]), .count = counts[1] },
     } });
-    defer pool.deinit(c.gpa);
+    defer pool.deinit();
     var held: [10]Stack = undefined;
     var len: usize = 0;
     var in_use: [3]u32 = @splat(0);
@@ -94,7 +94,7 @@ fn sum(y: *Summer.Yielder, first: u32, base: u64) error{Canceled}!u64 {
 
 fn coroutineProgram(_: void, c: *shake.Case) !void {
     var pool = try Pool.init(c.gpa, .{ .classes = &.{.{ .size = .fromRaw(32 * 1024), .count = 4 }} });
-    defer pool.deinit(c.gpa);
+    defer pool.deinit();
     const Slot = struct { co: *Summer, total: u64 };
     var slots: [4]?Slot = @splat(null);
     defer for (&slots) |*slot| if (slot.*) |s| pool.give(s.co.deinit());
@@ -152,7 +152,7 @@ fn poolBooks(_: void, c: *shake.Case) !void {
         .{ .size = .fromRaw(sizes[0]), .count = counts[0] },
         .{ .size = .fromRaw(sizes[2]), .count = counts[2] },
     } });
-    defer pool.deinit(c.gpa);
+    defer pool.deinit();
     const total = counts[0] + counts[1] + counts[2];
     if (pool.count() != total) return error.WrongCount;
     var held: [10]Stack = undefined;

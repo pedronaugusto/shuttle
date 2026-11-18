@@ -83,6 +83,24 @@ test "a generator's error comes out of next" {
     s.deinit();
 }
 
+test "a body canceled by its task, not by the generator, comes out of next as Canceled, never as the end" {
+    if (!supported) return error.SkipZigTest;
+    const G = Generator(u8, error{});
+    const body = struct {
+        // The body's own Io call was canceled: the generator never asked.
+        fn run(y: *G.Yielder) error{Canceled}!void {
+            try y.yield(1);
+            return error.Canceled;
+        }
+    }.run;
+    var g = try G.init(try stack(), body, .{});
+    try std.testing.expectEqual(@as(?u8, 1), try g.next());
+    try std.testing.expectError(error.Canceled, g.next());
+    try std.testing.expectEqual(@as(?u8, null), try g.next());
+    var s = g.deinit();
+    s.deinit();
+}
+
 test "ending a suspended coroutine cancels it: its yield fails, its defers run, and it yields no more" {
     if (!supported) return error.SkipZigTest;
     const G = Generator(u32, error{});
@@ -157,7 +175,7 @@ test "a coroutine runs coroutines of its own" {
 test "coroutines on a pool's stacks give them back for the next ones" {
     if (!supported) return error.SkipZigTest;
     var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{.{ .size = .fromRaw(32 * 1024), .count = 4 }} });
-    defer pool.deinit(std.testing.allocator);
+    defer pool.deinit();
     var total: u64 = 0;
     for (0..100) |round| {
         const co = try Summer.init((try pool.take(.fromRaw(16 * 1024))).?, sum, .{@as(u64, 1)});

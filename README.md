@@ -152,7 +152,7 @@ fn jobs() !void {
         .{ .size = .fromRaw(64 * 1024), .count = 128 },
         .{ .size = .fromRaw(1024 * 1024), .count = 8 },
     } });
-    defer pool.deinit(gpa);
+    defer pool.deinit();
     var worker: shuttle.Context = .{};
     var job: Job = .{ .context = undefined, .stack = (try pool.take(.fromRaw(16 * 1024))).?, .worker = &worker };
     job.context = try shuttle.handoff.init(&job.stack, *Job, work, &job);
@@ -210,7 +210,7 @@ its `try` unwinds it through its defers.
 |---|---|
 | `Stack.init(.{ .size, .guard, .commit })`, `stack.deinit()` | A stack of its own: usable bytes, a guard below them, and on Windows what is committed at first |
 | `stack.carve(T)`, `stack.carveBytes(len, alignment)`, `stack.discard(keep_from)`, `stack.usable()` | Takes a `T`, or bytes of a size known only at run time, from the top for what lives as long as the stack; gives pages below a point back to the system; the usable bytes, for code that reads or fills a stack nothing runs on |
-| `Pool.init(gpa, .{ .classes, .guard, .commit })`, `pool.deinit(gpa)` | Stacks in size classes, their address space reserved at once; each made usable the first time it is handed out |
+| `Pool.init(gpa, .{ .classes, .guard, .commit })`, `pool.deinit()` | Stacks in size classes, their address space reserved at once; each made usable the first time it is handed out |
 | `pool.take(size)`, `pool.give(stack)` | The smallest class that fits and has a stack free, or null, or `error.SystemResources` when the system refused to make a fresh one usable; a stack back. Any thread |
 | `pool.takeExactly(size)`, `pool.number(stack)`, `pool.stackOf(n)`, `pool.count()`, `pool.inUse()`, `pool.reached()` | Only the smallest class that fits; a stack's stable number among all the pool's, and the stack a number names, so a holder keeps only the number; how many it holds; how many are out; how many were ever handed out |
 | `Context.init(&stack, Arg, Message, entry, arg)`, `context.deinit(&stack)` | A context that runs `entry(arg, message)` on `stack` when first switched to, its switches carrying `Message`s (`Context.Nothing` when they carry none), and only them: a switch carrying another panics; ended, its stack free again |

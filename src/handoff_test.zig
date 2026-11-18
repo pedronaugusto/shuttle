@@ -114,7 +114,7 @@ test "worker threads run contexts that park themselves on another worker's queue
     Jobs.done = .init(.fromRaw(0));
     for (&Jobs.all, 0..) |*w, i| w.* = .{ .index = i };
     var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{.{ .size = .fromRaw(64 * 1024), .count = Jobs.count }} });
-    defer pool.deinit(std.testing.allocator);
+    defer pool.deinit();
     for (&Jobs.jobs, 0..) |*job, i| {
         Jobs.stacks[i] = (try pool.take(.fromRaw(64 * 1024))).?;
         job.* = .{ .context = try handoff.init(&Jobs.stacks[i], *Jobs.Job, Jobs.body, job) };
@@ -140,7 +140,7 @@ test "a pool hands out the smallest class that fits, keeps guards between its st
         .{ .size = .fromRaw(256 * 1024), .count = 2 },
         .{ .size = .fromRaw(32 * 1024), .count = 70 },
     } });
-    defer pool.deinit(std.testing.allocator);
+    defer pool.deinit();
     var taken: [70]@import("Stack.zig") = undefined;
     for (&taken) |*s| s.* = (try pool.take(.fromRaw(16 * 1024))).?;
     // The small class is empty now: a small request takes a large stack.
@@ -174,7 +174,7 @@ test "a pool numbers its stacks once across its classes, counts those in use, an
         .{ .size = .fromRaw(256 * 1024), .count = 2 },
         .{ .size = .fromRaw(32 * 1024), .count = 3 },
     } });
-    defer pool.deinit(std.testing.allocator);
+    defer pool.deinit();
     try std.testing.expectEqual(@as(u32, 5), pool.count());
     var taken: [5]@import("Stack.zig") = undefined;
     var seen: [5]bool = @splat(false);
@@ -218,7 +218,7 @@ test "threads take and give a pool's stacks at once, each stack held by one at a
         .{ .size = .fromRaw(32 * 1024), .count = 6 },
         .{ .size = .fromRaw(256 * 1024), .count = 3 },
     } });
-    defer pool.deinit(std.testing.allocator);
+    defer pool.deinit();
     var owners: [9]aegis.Atomic(Holder) = @splat(.init(nobody));
     var threads: [4]std.Thread = undefined;
     for (&threads, 1..) |*t, me| t.* = try std.Thread.spawn(.{}, Churn.run, .{ &pool, &owners, @as(u32, @intCast(me)) });
@@ -230,7 +230,7 @@ test "a pool makes a stack usable only when it is first handed out, and keeps it
     if (!supported) return error.SkipZigTest;
     // Thousands of stacks cost one reservation at init.
     var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{.{ .size = .fromRaw(256 * 1024), .count = 16384 }} });
-    defer pool.deinit(std.testing.allocator);
+    defer pool.deinit();
     try std.testing.expectEqual(@as(u32, 0), pool.reached());
     const first = (try pool.take(.fromRaw(16 * 1024))).?;
     try std.testing.expectEqual(@as(u32, 1), pool.reached());
@@ -264,7 +264,7 @@ test "a stack the system refuses to make usable is an error at its take, and is 
     if (builtin.os.tag == .windows or builtin.os.tag == .openbsd) return error.SkipZigTest;
     const io = std.testing.io;
     var pool = try Pool.init(std.testing.allocator, .{ .classes = &.{.{ .size = .fromRaw(64 * 1024), .count = 2 }} });
-    defer pool.deinit(std.testing.allocator);
+    defer pool.deinit();
     const held = (try pool.take(.fromRaw(16 * 1024))).?;
     errdefer pool.give(held);
     // The next stack never handed out is the second.

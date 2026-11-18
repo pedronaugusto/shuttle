@@ -115,7 +115,7 @@ const Bench = struct {
     }
 
     fn poolTeardown(b: *Bench) WorkloadError!void {
-        b.pool.deinit(b.gpa);
+        b.pool.deinit();
     }
 
     fn never(_: *Bench, _: ?shuttle.Context.Nothing) callconv(.c) noreturn {

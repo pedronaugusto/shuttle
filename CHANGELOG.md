@@ -8,6 +8,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- `Generator.next` returns `(Error || error{Canceled})!?Yield`: a body that returns `error.Canceled` while `next` runs it (its task was canceled; the generator cancels only in `deinit`) comes out as `error.Canceled`, where it read as the end of the values.
+- `Pool.deinit` takes no allocator: the pool keeps the one `init` took, in the private field `Pool.gpa`, which a `Pool` now requires beside `Pool.classes`, `Pool.guard` and `Pool.reservation` (`Pool.init` makes one).
 - `Panic.describe` returns `std.Io.Writer.Error!void`, the failure to write a panic's traces, where it gave up silently: the panic handler goes on to std's when they cannot be written, and the stack overflow handler ends the process at once when its report cannot be.
 - `Pool.classes` is a slice of the public `Pool.Shelf`, one class's stacks, and a shelf's `free` and `unmade` of the public `Pool.List`, where both types were private: the pool's own state, read through its functions.
 

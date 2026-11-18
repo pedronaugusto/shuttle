@@ -3,8 +3,8 @@
 //! `Generator(Yield, Error)` runs a body `fn (*Yielder, args...) E!void`,
 //! whose error set E holds `Error` and `error.Canceled`; `next` returns
 //! each yielded value, then null once the body returns, or the error it
-//! returned. Ending a generator before its body returns cancels it, as
-//! ending a coroutine does.
+//! returned, `error.Canceled` among them. Ending a generator before its
+//! body returns cancels it, as ending a coroutine does.
 const Stack = @import("Stack.zig");
 const Coroutine = @import("coroutine.zig").Coroutine;
 
@@ -14,9 +14,6 @@ pub fn Generator(comptime Yield: type, comptime Error: type) type {
         const Co = Coroutine(void, Yield, (Error || error{Canceled})!void);
 
         co: *Co,
-
-        /// Whether the body fails only by being canceled.
-        const none = if (@typeInfo(Error).error_set.error_names) |names| names.len == 0 else false;
 
         pub const Yielder = Co.Yielder;
         pub const InitError = Co.InitError;
@@ -34,23 +31,16 @@ pub fn Generator(comptime Yield: type, comptime Error: type) type {
         }
 
         /// The next value the body yields, or null once it has returned.
-        /// A panic in the body panics here.
-        pub fn next(g: *Self) Error!?Yield {
+        /// The body's error otherwise: `error.Canceled` when the task
+        /// running it was canceled (a generator cancels its body only in
+        /// `deinit`, never while `next` runs it). A panic in the body panics
+        /// here.
+        pub fn next(g: *Self) (Error || error{Canceled})!?Yield {
             if (g.co.done()) return null;
             switch (g.co.next({})) {
                 .yielded => |v| return v,
                 .returned => |r| {
-                    if (comptime none) {
-                        // a body stopped by its cancel has no more values: null, as when it returns
-                        r catch |e| switch (e) {
-                            error.Canceled => return null,
-                        };
-                    } else {
-                        r catch |e| switch (e) {
-                            error.Canceled => {},
-                            else => |other| return other,
-                        };
-                    }
+                    try r;
                     return null;
                 },
             }
