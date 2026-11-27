@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-27
+
 ### Breaking
 
 - `Generator.next` returns `(Error || error{Canceled})!?Yield`: a body that returns `error.Canceled` while `next` runs it (its task was canceled; the generator cancels only in `deinit`) comes out as `error.Canceled`, where it read as the end of the values.
@@ -16,7 +18,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Properties for what the README promises of a pool's books (`inUse`, `reached`, `number` and `stackOf`, `takeExactly`), of a generator (its values in order, then null or its error, and ending it early cancels the body once), and of carving (aligned pieces from the top down, refused only below the lowest byte the stack can make usable), each checked against a planted fault.
-
 - Contexts run under CET shadow stacks on Linux x86_64 (with the LLVM backend): a stack made on a thread that has a shadow stack gets one of its own (`Stack.shadow`; a pool keeps each of its stacks' for the pool's life), the switch saves the shadow stack pointer of the context it leaves and takes the restore token of the one it resumes, and a new context on a reused stack starts its shadow stack at the end again. A context made on such a thread on a stack without one panics, where its returns would fault far from it.
 - The resume address and a new context's trampoline are landing pads (`endbr64` on x86_64, `bti j` on aarch64), for indirect branch tracking and branch target identification; both are no-ops where those are off.
 
