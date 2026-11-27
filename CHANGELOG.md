@@ -31,6 +31,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Development: handoff_test's counters and stack holders are `aegis.Atomic` cells of a `units.Count` and an `id.Id`, where they were raw `std.atomic.Value`s.
 - `memory.commit`'s one contract left on `std.debug.assert` (a guard page is committed only on Windows) is `aegis.assert.invariant`: it holds in every build.
 - Pins aegis breaking-0.3 (a34e694), the 0.3.0 line the family is on, where it pinned aegis 0.2.3, and shakedown main (4979fa9) for the tests. shuttle builds on it unchanged.
+- Pins aegis 0.5.0.
 
 ### Fixed
 
